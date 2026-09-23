@@ -1,0 +1,179 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Form controls default to dark text so fields on light surfaces stay readable
+   even inside the dark app shell (which sets a light inherited text color).
+   Any explicit Tailwind text-* utility on an input outranks this, so dark
+   inputs (text-white / text-slate-100 / .input-dark) are unaffected. */
+@layer base {
+  input,
+  textarea,
+  select {
+    color: #18181b;
+  }
+}
+
+* {
+  font-family: 'Outfit', 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background-color: rgba(37, 99, 235, 0.22);
+}
+
+/* Refined scrollbars for a premium, consistent feel */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd0d8 transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: #cbd0d8;
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: #aab0bb;
+}
+
+/* Dark surfaces get a matching dark scrollbar */
+.dark-surface,
+.dark-surface * {
+  scrollbar-color: #3a4150 transparent;
+}
+.dark-surface *::-webkit-scrollbar-thumb {
+  background-color: #3a4150;
+}
+.dark-surface *::-webkit-scrollbar-thumb:hover {
+  background-color: #515d74;
+}
+
+/* Consistent keyboard focus ring across the whole app */
+:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.55);
+  outline-offset: 2px;
+}
+
+/* Keep browser-autofilled fields readable on dark inputs. Scoped ONLY to the
+   autofill pseudo-class so it never forces text color on normal (or light) fields. */
+.dark-surface input:-webkit-autofill,
+.dark-surface input:-webkit-autofill:hover,
+.dark-surface input:-webkit-autofill:focus,
+.dark-surface input:autofill,
+.input-dark:-webkit-autofill,
+.input-dark:-webkit-autofill:hover,
+.input-dark:-webkit-autofill:focus,
+.input-dark:autofill {
+  -webkit-text-fill-color: #ffffff !important;
+  caret-color: #ffffff !important;
+  -webkit-box-shadow: 0 0 0 1000px #0d0f14 inset !important;
+  box-shadow: 0 0 0 1000px #0d0f14 inset !important;
+  transition: background-color 9999s ease-in-out 0s;
+}
+
+@layer components {
+  /* Surfaces */
+  .card {
+    @apply bg-white rounded-2xl border border-zinc-200/80 shadow-sm shadow-zinc-900/[0.03];
+  }
+  .card-interactive {
+    @apply card transition-all duration-200 hover:border-zinc-300 hover:shadow-md hover:shadow-zinc-900/[0.06];
+  }
+  .card-dark {
+    @apply bg-obsidian-900 rounded-2xl border border-white/10 shadow-lg shadow-black/20;
+  }
+
+  /* Typography helpers */
+  .page-title {
+    @apply text-2xl font-bold tracking-tight text-zinc-900;
+  }
+  .field-label {
+    @apply block text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-1.5;
+  }
+  .field-label-dark {
+    @apply block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-1.5;
+  }
+
+  /* Buttons */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg text-sm font-semibold transition-all duration-200 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply btn bg-brand-600 hover:bg-brand-700 active:bg-brand-800 text-white shadow-sm shadow-brand-900/20 px-4 py-2.5;
+  }
+  .btn-dark {
+    @apply btn bg-zinc-900 hover:bg-zinc-800 text-white px-4 py-2.5;
+  }
+  .btn-secondary {
+    @apply btn bg-white border border-zinc-200 hover:bg-zinc-50 hover:border-zinc-300 text-zinc-700 px-4 py-2.5;
+  }
+
+  /* Inputs */
+  .input {
+    @apply w-full bg-zinc-50 border border-zinc-200 text-zinc-900 text-sm rounded-lg px-3 py-2.5 transition-colors placeholder:text-zinc-400 focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30;
+  }
+  .input-dark {
+    @apply w-full bg-obsidian-950 border border-white/10 text-white text-sm rounded-lg px-3 py-2.5 transition-colors placeholder:text-zinc-600 focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30;
+  }
+
+  /* Badges */
+  .badge {
+    @apply inline-flex items-center gap-1 text-xs font-medium px-2.5 py-0.5 rounded-full;
+  }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out;
+}
+
+@keyframes slide-in-right {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.25s ease-out;
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.animate-scale-in {
+  animation: scale-in 0.2s ease-out;
+}
+
+@keyframes check-pop {
+  0% { opacity: 0; transform: scale(0.4); }
+  60% { opacity: 1; transform: scale(1.12); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+.animate-check-pop {
+  animation: check-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
