@@ -17,7 +17,7 @@ const STATUS_FILTERS: { value: LeadStatus | 'all'; label: string }[] = [
 ]
 
 export default function ShopDashboard() {
-  const { profile } = useAuth()
+  const { profile, profileLoading } = useAuth()
   const navigate = useNavigate()
   const [leads, setLeads] = useState<Lead[]>([])
   const [loading, setLoading] = useState(true)
@@ -79,7 +79,31 @@ export default function ShopDashboard() {
       )
     : leads
 
-  if (!profile) return <LoadingScreen />
+  if (profileLoading || !profile) return <LoadingScreen />
+
+  if (!profile?.shop_id) {
+    return (
+      <div className="flex-1 overflow-y-auto">
+        <div className="p-6 max-w-2xl mx-auto">
+          <div className="mt-10 text-center bg-obsidian-900/40 rounded-2xl border border-white/10 p-10">
+            <div className="w-14 h-14 mx-auto rounded-2xl bg-cobalt-500/15 ring-1 ring-cobalt-500/30 flex items-center justify-center mb-4">
+              <Inbox size={26} className="text-cobalt-300" />
+            </div>
+            <h1 className="text-2xl font-bold text-slate-100">
+              Welcome{profile?.full_name ? `, ${profile.full_name}` : ''}
+            </h1>
+            <p className="text-sm text-slate-400 mt-2 leading-relaxed">
+              Your account isn't linked to a shop yet. Once your shop is set up you'll see your
+              customer leads and shareable customizer link right here.
+            </p>
+            <p className="text-xs text-slate-500 mt-4">
+              Reach out to your SpecPlus administrator to finish setting up your shop.
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   const stats = {
     total: leads.length,

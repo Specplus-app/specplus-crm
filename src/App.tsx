@@ -19,8 +19,9 @@ import { LoadingScreen } from './components/LoadingScreen'
 function AppRoutes() {
   const { loading } = useAuth()
 
-  // While the session and profile are still resolving, show a centered spinner
-  // instead of rendering routes against not-yet-loaded user data.
+  // While the initial session and profile are resolving, show a centered spinner
+  // instead of rendering routes against not-yet-loaded user data. Per-route
+  // profile refetches are handled by ProtectedRoute so public pages stay stable.
   if (loading) return <LoadingScreen />
 
   return (
