@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { supabase, Lead, LeadStatus, formatCurrency, formatDate } from '../lib/supabase'
 import StatusSelect from '../components/StatusSelect'
+import { LoadingScreen } from '../components/LoadingScreen'
 import { Search, Inbox, TrendingUp, Clock, CheckCircle2, Mail, Phone, MapPin, ChevronRight, Link2, Copy, Check, ExternalLink, type LucideIcon } from 'lucide-react'
 
 const STATUS_FILTERS: { value: LeadStatus | 'all'; label: string }[] = [
@@ -77,6 +78,8 @@ export default function ShopDashboard() {
         l.vehicle_name.toLowerCase().includes(search.toLowerCase())
       )
     : leads
+
+  if (!profile) return <LoadingScreen />
 
   const stats = {
     total: leads.length,

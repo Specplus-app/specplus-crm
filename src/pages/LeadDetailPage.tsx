@@ -4,7 +4,7 @@ import { useAuth } from '../lib/auth'
 import { supabase, Lead, LeadNote, LeadStatus, PartEntry, ShipSize, formatCurrency, formatDate, formatDateTime, getHighlightColor, estimateLeadTimeDays, DEFAULT_LEAD_TIME_MULTIPLIER } from '../lib/supabase'
 import StatusSelect from '../components/StatusSelect'
 import ShopCustomPricingModal from '../components/ShopCustomPricingModal'
-import { ArrowLeft, Mail, Phone, MapPin, Calendar, DollarSign, Package, Send, User, Clock, Layers, Palette, Image as ImageIcon, PencilRuler, type LucideIcon } from 'lucide-react'
+import { ArrowLeft, Mail, Phone, MapPin, Calendar, DollarSign, Package, Send, User, Clock, Layers, Palette, Image as ImageIcon, PencilRuler, Loader2, Check, AlertCircle, type LucideIcon } from 'lucide-react'
 
 const customUploadUrl = (path: string | null): string | null =>
   path ? supabase.storage.from('customer-uploads').getPublicUrl(path).data.publicUrl : null
@@ -83,6 +83,9 @@ export default function LeadDetailPage() {
   const [pricingItem, setPricingItem] = useState<PartEntry | null>(null)
   const [savingPrice, setSavingPrice] = useState(false)
   const [enlarged, setEnlarged] = useState<{ url: string; label: string; view: 'front' | 'rear' } | null>(null)
+  const [shopInfo, setShopInfo] = useState<{ name: string; logo_url: string | null; contact_email: string | null }>({ name: '', logo_url: null, contact_email: null })
+  const [sendingEmail, setSendingEmail] = useState(false)
+  const [emailStatus, setEmailStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
   const loadLead = useCallback(async () => {
     if (!leadId) return
@@ -127,13 +130,14 @@ export default function LeadDetailPage() {
 
   useEffect(() => {
     if (!profile?.shop_id) return
-    supabase.from('shops').select('customizer_config').eq('id', profile.shop_id).maybeSingle()
+    supabase.from('shops').select('customizer_config, name, logo_url, contact_email').eq('id', profile.shop_id).maybeSingle()
       .then(({ data }) => {
         const cfg = (data?.customizer_config ?? {}) as Record<string, unknown>
         const rates = cfg.shipping_rates as Record<ShipSize, number> | undefined
         if (rates) setShipRates({ ...DEFAULT_SHIP_RATES, ...rates })
         const mult = cfg.lead_time_multiplier as number | undefined
         if (typeof mult === 'number') setLeadMultiplier(mult)
+        setShopInfo({ name: data?.name ?? '', logo_url: data?.logo_url ?? null, contact_email: data?.contact_email ?? null })
       })
   }, [profile?.shop_id])
 
@@ -230,63 +234,75 @@ export default function LeadDetailPage() {
   const parts: PartEntry[] =
     Array.isArray(lead.selected_parts) ? lead.selected_parts : []
 
-  const buildEmailBody = (): string => {
-    const L: string[] = []
-    L.push(`Hi ${lead.customer_name},`)
-    L.push('')
-    L.push(`Here is the completed build sheet for your ${lead.vehicle_name}.`)
-    L.push('')
-    L.push('VEHICLE')
-    const vehicleLine = [lead.vehicle_year, lead.vehicle_make, lead.vehicle_model, lead.vehicle_trim]
-      .filter(Boolean).join(' ')
-    L.push(`  ${vehicleLine || lead.vehicle_name}`)
-    if (lead.paint_code) L.push(`  Paint code: ${lead.paint_code}`)
-    L.push('')
+  const handleEmailBuildSheet = async () => {
+    if (!lead || sendingEmail) return
+    setSendingEmail(true)
+    setEmailStatus(null)
 
-    const line = (part: PartEntry, indent: string, alreadyPurchased: boolean) => {
-      const priceText = alreadyPurchased ? 'already purchased' : formatCurrency(part.price)
-      L.push(`${indent}- ${part.name}: ${priceText}`)
-      if (part.paint_style_name) L.push(`${indent}    Paint style: ${part.paint_style_name}`)
-      part.selected_options?.forEach((opt) => L.push(`${indent}    + ${opt.name} (${formatCurrency(opt.price)})`))
-      if (part.notes) L.push(`${indent}    Note: ${part.notes.replace(/\s+/g, ' ').trim()}`)
+    const { data: sheet, error: saveError } = await supabase
+      .from('build_sheets')
+      .upsert({
+        lead_id: lead.id,
+        shop_id: lead.shop_id,
+        shop_name: shopInfo.name,
+        shop_logo_url: shopInfo.logo_url,
+        customer_name: lead.customer_name,
+        customer_email: lead.customer_email,
+        vehicle_name: lead.vehicle_name,
+        vehicle_year: lead.vehicle_year,
+        vehicle_make: lead.vehicle_make,
+        vehicle_model: lead.vehicle_model,
+        vehicle_trim: lead.vehicle_trim,
+        paint_code: lead.paint_code,
+        fulfillment_mode: lead.fulfillment_mode,
+        is_custom: lead.is_custom,
+        front_image_url: customUploadUrl(lead.front_image_url),
+        rear_image_url: customUploadUrl(lead.rear_image_url),
+        selected_parts: parts,
+        parts_total: lead.parts_total,
+        shipping_total: lead.shipping_total,
+        grand_total: lead.grand_total,
+        estimated_lead_time_days: lead.estimated_lead_time_days,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'lead_id' })
+      .select('id')
+      .maybeSingle()
+
+    if (saveError || !sheet) {
+      setEmailStatus({ type: 'error', message: 'Could not save the build sheet. Please try again.' })
+      setSendingEmail(false)
+      return
     }
 
-    const groupIds = Array.from(new Set(parts.filter((p) => p.group_id).map((p) => p.group_id)))
-    const groupIsBuyNew = (gid: string | null | undefined) => parts.some((p) => p.group_id === gid && p.type === 'new')
+    const buildUrl = `${window.location.origin}/build/${sheet.id}`
+    const { data: sessionData } = await supabase.auth.getSession()
+    const token = sessionData.session?.access_token
 
-    const renderSection = (title: string, isNew: boolean) => {
-      const secGroups = groupIds.filter((gid) => groupIsBuyNew(gid) === isNew)
-      const secLoose = parts.filter((p) => !p.group_id && (p.type === 'new') === isNew)
-      if (secGroups.length === 0 && secLoose.length === 0) return
-      L.push(title)
-      secGroups.forEach((gid) => {
-        const gp = parts.filter((p) => p.group_id === gid)
-        L.push(`  [${gp[0]?.group_name ?? 'Group'}]`)
-        gp.forEach((p, idx) => line(p, '  ', idx !== 0))
+    try {
+      const resp = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-build-sheet`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerEmail: lead.customer_email,
+          customerName: lead.customer_name,
+          vehicleName: lead.vehicle_name,
+          shopName: shopInfo.name,
+          replyTo: shopInfo.contact_email,
+          buildUrl,
+          grandTotal: formatCurrency(lead.grand_total),
+        }),
       })
-      secLoose.forEach((p) => line(p, '  ', false))
-      L.push('')
+      const json = await resp.json().catch(() => null)
+      if (!resp.ok) {
+        setEmailStatus({ type: 'error', message: json?.error ?? 'Could not send the email. Please try again.' })
+      } else {
+        setEmailStatus({ type: 'success', message: `Build sheet emailed to ${lead.customer_email}.` })
+      }
+    } catch {
+      setEmailStatus({ type: 'error', message: 'Network error while sending the email.' })
     }
-
-    renderSection('BUY NEW', true)
-    renderSection('PAINT MINE', false)
-
-    L.push('PRICING')
-    L.push(`  Parts & Labor: ${formatCurrency(lead.parts_total)}`)
-    L.push(`  Shipping: ${formatCurrency(lead.shipping_total)}`)
-    L.push(`  Grand Total: ${formatCurrency(lead.grand_total)}`)
-    if (lead.estimated_lead_time_days > 0) {
-      L.push('')
-      L.push(`Estimated lead time: ${lead.estimated_lead_time_days} ${lead.estimated_lead_time_days === 1 ? 'day' : 'days'}`)
-    }
-    L.push('')
-    L.push('Reply to this email if you have any questions or would like to move forward.')
-    return L.join('\n')
+    setSendingEmail(false)
   }
-
-  const emailHref = `mailto:${lead.customer_email}?subject=${encodeURIComponent(
-    `Your ${lead.vehicle_name} build quote`
-  )}&body=${encodeURIComponent(buildEmailBody())}`
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -330,14 +346,15 @@ export default function LeadDetailPage() {
             )}
           </div>
 
-          <div className="flex flex-wrap gap-2 mt-5 pt-5 border-t border-zinc-100">
-            <a
-              href={emailHref}
-              className="flex items-center gap-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+          <div className="flex flex-wrap items-center gap-2 mt-5 pt-5 border-t border-zinc-100">
+            <button
+              onClick={handleEmailBuildSheet}
+              disabled={sendingEmail}
+              className="flex items-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
             >
-              <Mail size={15} />
-              Email Build Sheet
-            </a>
+              {sendingEmail ? <Loader2 size={15} className="animate-spin" /> : <Mail size={15} />}
+              {sendingEmail ? 'Sending…' : 'Email Build Sheet'}
+            </button>
             {lead.customer_phone && (
               <a
                 href={`tel:${lead.customer_phone}`}
@@ -346,6 +363,18 @@ export default function LeadDetailPage() {
                 <Phone size={15} />
                 Call {lead.customer_phone}
               </a>
+            )}
+            {emailStatus && (
+              <span
+                className={`flex items-center gap-1.5 text-sm font-medium rounded-lg px-3 py-2 ${
+                  emailStatus.type === 'success'
+                    ? 'text-emerald-700 bg-emerald-50 border border-emerald-200'
+                    : 'text-red-700 bg-red-50 border border-red-200'
+                }`}
+              >
+                {emailStatus.type === 'success' ? <Check size={15} /> : <AlertCircle size={15} />}
+                {emailStatus.message}
+              </span>
             )}
           </div>
         </div>

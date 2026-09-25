@@ -6,3 +6,6 @@ verify_jwt = true
 
 [functions.bootstrap-admin]
 verify_jwt = false
+
+[functions.send-build-sheet]
+verify_jwt = true

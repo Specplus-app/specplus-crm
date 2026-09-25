@@ -65,6 +65,33 @@ export type Lead = {
   updated_at: string
 }
 
+export type BuildSheet = {
+  id: string
+  lead_id: string | null
+  shop_id: string | null
+  shop_name: string
+  shop_logo_url: string | null
+  customer_name: string
+  customer_email: string
+  vehicle_name: string
+  vehicle_year: string | null
+  vehicle_make: string | null
+  vehicle_model: string | null
+  vehicle_trim: string | null
+  paint_code: string | null
+  fulfillment_mode: 'local' | 'mail'
+  is_custom: boolean
+  front_image_url: string | null
+  rear_image_url: string | null
+  selected_parts: PartEntry[]
+  parts_total: number
+  shipping_total: number
+  grand_total: number
+  estimated_lead_time_days: number
+  created_at: string
+  updated_at: string
+}
+
 export type CustomPartBox = {
   view: 'front' | 'rear'
   x: number
