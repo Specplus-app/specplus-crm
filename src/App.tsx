@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useParams } from 'react-router-dom'
 import { AuthProvider, useAuth } from './lib/auth'
 import LoginPage from './pages/LoginPage'
 import ShopDashboard from './pages/ShopDashboard'
@@ -6,7 +6,6 @@ import LeadDetailPage from './pages/LeadDetailPage'
 import AdminDashboard from './pages/AdminDashboard'
 import AdminShopDetail from './pages/AdminShopDetail'
 import AdminTemplates from './pages/AdminTemplates'
-import PublicLeadForm from './pages/PublicLeadForm'
 import ShopVehicles from './pages/ShopVehicles'
 import VehicleBuilder from './pages/VehicleBuilder'
 import CustomerCustomizer from './pages/CustomerCustomizer'
@@ -15,6 +14,11 @@ import BuildSheet from './pages/BuildSheet'
 import ProtectedRoute from './components/ProtectedRoute'
 import AppShell from './components/AppShell'
 import { LoadingScreen } from './components/LoadingScreen'
+
+function LegacyLeadRedirect() {
+  const { shopId } = useParams<{ shopId: string }>()
+  return <Navigate to={shopId ? `/customize/${shopId}` : '/login'} replace />
+}
 
 function AppRoutes() {
   const { loading } = useAuth()
@@ -27,7 +31,7 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
-      <Route path="/lead/:shopId" element={<PublicLeadForm />} />
+      <Route path="/lead/:shopId" element={<LegacyLeadRedirect />} />
       <Route path="/customize/:shopId" element={<CustomerCustomizer />} />
       <Route path="/embed/vehicle/:vehicleId" element={<VehicleEmbed />} />
       <Route path="/build/:id" element={<BuildSheet />} />
