@@ -14,9 +14,10 @@
    - No RLS changes. Existing shop policies continue to apply.
 
 3. Notes
-   1. A shop is considered read-only when `trial_ends_at` is in the past AND
-      `is_lifetime_free` is false AND `subscription_status` is not 'active'. This is
-      computed in the application layer.
+   1. Active and lifetime-free shops retain full access. A `trial`/`trialing` shop
+      remains writable only while `trial_ends_at` is current. Suspended, cancelled,
+      or other non-active statuses are read-only immediately. This is computed in
+      the application layer.
    2. Adding `trial_ends_at` with a default populates all existing shops so no shop is
       left without a trial end date.
 */
