@@ -41,6 +41,54 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const finishPendingShopSetup = useCallback(async (
+    authUser: User,
+    accessToken: string,
+    requestedShopName?: string,
+    requestedFullName?: string,
+  ): Promise<string | null> => {
+    const { data: existingProfile, error: profileError } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', authUser.id)
+      .maybeSingle()
+
+    if (profileError) return profileError.message
+    if (!existingProfile) return 'Your profile could not be found. Please contact support.'
+
+    if (existingProfile.role !== 'shop_user' || existingProfile.shop_id) {
+      setProfile(existingProfile as Profile)
+      return null
+    }
+
+    const metadataShopName = typeof authUser.user_metadata?.shop_name === 'string'
+      ? authUser.user_metadata.shop_name.trim()
+      : ''
+    const metadataFullName = typeof authUser.user_metadata?.full_name === 'string'
+      ? authUser.user_metadata.full_name.trim()
+      : ''
+    const shopName = requestedShopName?.trim() || metadataShopName
+    const fullName = requestedFullName?.trim() || metadataFullName || existingProfile.full_name || ''
+
+    if (!shopName) {
+      return 'Your account is verified, but your shop setup is incomplete. Please contact support.'
+    }
+
+    const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/signup-shop`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ full_name: fullName, shop_name: shopName }),
+    })
+
+    if (!res.ok) {
+      const detail = await res.json().catch(() => null)
+      return detail?.error ?? `Could not finish setting up your shop (${res.status}).`
+    }
+
+    await loadProfile(authUser.id)
+    return null
+  }, [loadProfile])
+
   const refreshProfile = useCallback(async () => {
     if (user?.id) await loadProfile(user.id)
   }, [user?.id, loadProfile])
@@ -73,35 +121,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [loadProfile])
 
   const signIn = useCallback(async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    return { error: error?.message ?? null }
-  }, [])
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+    if (error) return { error: error.message }
+    if (!data.session || !data.user) return { error: 'Signed in, but no active session was returned. Please try again.' }
+
+    const setupError = await finishPendingShopSetup(data.user, data.session.access_token)
+    if (setupError) {
+      await supabase.auth.signOut()
+      setProfile(null)
+      return { error: setupError }
+    }
+
+    await loadProfile(data.user.id)
+    return { error: null }
+  }, [finishPendingShopSetup, loadProfile])
 
   const signUp = useCallback(async (fullName: string, shopName: string, email: string, password: string) => {
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
-      options: { data: { full_name: fullName } },
+      options: { data: { full_name: fullName, shop_name: shopName } },
     })
     if (error) return { error: error.message }
     const token = data.session?.access_token
-    if (!token) return { error: 'Account created but no active session. Please sign in.' }
+    if (!token) return { error: 'Account created. Check your email to verify your address, then sign in.' }
 
     // A brand-new shop_user cannot insert a shop directly (RLS restricts shop
     // creation to admins), so a service-role edge function creates the shop and
-    // links it to this profile.
-    const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/signup-shop`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ full_name: fullName, shop_name: shopName }),
-    })
-    if (!res.ok) {
-      const detail = await res.json().catch(() => null)
-      return { error: detail?.error ?? `Could not finish setting up your shop (${res.status}).` }
-    }
-    await loadProfile(data.session!.user.id)
+    // links it to this profile. The same helper also finishes setup after email
+    // verification when Supabase does not return a session during sign-up.
+    const setupError = await finishPendingShopSetup(data.user, token, shopName, fullName)
+    if (setupError) return { error: setupError }
     return { error: null }
-  }, [loadProfile])
+  }, [finishPendingShopSetup])
 
   const signOut = useCallback(async () => {
     await supabase.auth.signOut()
