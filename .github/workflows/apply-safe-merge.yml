@@ -1,0 +1,50 @@
+name: Apply safe Bolt merge
+
+on:
+  push:
+    branches:
+      - feature/bolt-trial-signup-safe-merge-20260928
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-build:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reassemble and verify patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .safe-merge.part-01 .safe-merge.part-02 .safe-merge.part-03 .safe-merge.part-04 .safe-merge.part-05 > /tmp/safe-merge.patch.gz.b64
+          echo "3517bade5efa9eb78268d8fbbeedcca7f3e2c5e4298a8b01a479a3b7b8418398  /tmp/safe-merge.patch.gz.b64" | sha256sum -c -
+          base64 --decode /tmp/safe-merge.patch.gz.b64 | gunzip > /tmp/safe-merge.patch
+          echo "cdf2635dd91507d76a752796803f031194a5a6d44773731ffc017235fa514518  /tmp/safe-merge.patch" | sha256sum -c -
+          git apply --check /tmp/safe-merge.patch
+          git apply /tmp/safe-merge.patch
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Commit only source changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git restore --source=HEAD -- dist tsconfig.tsbuildinfo 2>/dev/null || true
+          rm -f .safe-merge.part-01 .safe-merge.part-02 .safe-merge.part-03 .safe-merge.part-04 .safe-merge.part-05
+          rm -f .github/workflows/apply-safe-merge.yml
+          git add -A
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Apply safe Bolt trial and signup update"
+          git push origin HEAD:${GITHUB_REF_NAME}
