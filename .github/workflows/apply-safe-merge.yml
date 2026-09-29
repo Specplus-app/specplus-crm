@@ -39,7 +39,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git restore --source=HEAD -- dist tsconfig.tsbuildinfo 2>/dev/null || true
+          rm -rf dist
+          git restore --source=HEAD -- dist
+          git restore --source=HEAD -- tsconfig.tsbuildinfo 2>/dev/null || true
           rm -f .safe-merge.part-01 .safe-merge.part-02 .safe-merge.part-03 .safe-merge.part-04 .safe-merge.part-05
           rm -f .github/workflows/apply-safe-merge.yml
           git add -A
