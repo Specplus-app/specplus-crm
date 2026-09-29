@@ -9,6 +9,7 @@ type AuthContextValue = {
   loading: boolean
   profileLoading: boolean
   signIn: (email: string, password: string) => Promise<{ error: string | null }>
+  signUp: (fullName: string, shopName: string, email: string, password: string) => Promise<{ error: string | null }>
   signOut: () => Promise<void>
   refreshProfile: () => Promise<void>
 }
@@ -76,13 +77,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error: error?.message ?? null }
   }, [])
 
+  const signUp = useCallback(async (fullName: string, shopName: string, email: string, password: string) => {
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { full_name: fullName } },
+    })
+    if (error) return { error: error.message }
+    const token = data.session?.access_token
+    if (!token) return { error: 'Account created but no active session. Please sign in.' }
+
+    // A brand-new shop_user cannot insert a shop directly (RLS restricts shop
+    // creation to admins), so a service-role edge function creates the shop and
+    // links it to this profile.
+    const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/signup-shop`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ full_name: fullName, shop_name: shopName }),
+    })
+    if (!res.ok) {
+      const detail = await res.json().catch(() => null)
+      return { error: detail?.error ?? `Could not finish setting up your shop (${res.status}).` }
+    }
+    await loadProfile(data.session!.user.id)
+    return { error: null }
+  }, [loadProfile])
+
   const signOut = useCallback(async () => {
     await supabase.auth.signOut()
     setProfile(null)
   }, [])
 
   return (
-    <AuthContext.Provider value={{ session, user, profile, loading, profileLoading, signIn, signOut, refreshProfile }}>
+    <AuthContext.Provider value={{ session, user, profile, loading, profileLoading, signIn, signUp, signOut, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   )

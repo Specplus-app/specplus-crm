@@ -1,15 +1,34 @@
 import { useState, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
-import { supabase, BuildSheet as BuildSheetRecord, PartEntry, formatCurrency, getHighlightColor } from '../lib/supabase'
+import { supabase, BuildSheet as BuildSheetRecord, PartEntry, formatCurrency, getHighlightColor, svgPathAnchor } from '../lib/supabase'
 import { AlertCircle, Layers, Clock, Package, Palette, X } from 'lucide-react'
 
 type EnlargedPhoto = { url: string; label: string; view: 'front' | 'rear' } | null
+
+function anchorFor(p: PartEntry): { x: number; y: number } {
+  if (p.box) return { x: p.box.x, y: Math.max(0, p.box.y) }
+  if (p.svg_path) return svgPathAnchor(p.svg_path)
+  return { x: 2, y: 6 }
+}
 
 function PhotoLabels({ boxes }: { boxes: PartEntry[] }) {
   return (
     <>
       <svg className="absolute inset-0 w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
-        {boxes.filter((p) => p.box!.points && p.box!.points!.length >= 3).map((p) => {
+        {boxes.filter((p) => p.svg_path).map((p) => {
+          const c = getHighlightColor(p.highlight_color ?? 'green')
+          return (
+            <path
+              key={`svg-${p.id}`}
+              d={p.svg_path!}
+              fill={c.fill}
+              stroke={c.stroke}
+              strokeWidth={0.4}
+              vectorEffect="non-scaling-stroke"
+            />
+          )
+        })}
+        {boxes.filter((p) => p.box?.points && p.box.points.length >= 3).map((p) => {
           const color = p.type === 'new' ? 'rgb(96,165,250)' : 'rgb(52,211,153)'
           return (
             <polygon
@@ -23,7 +42,7 @@ function PhotoLabels({ boxes }: { boxes: PartEntry[] }) {
           )
         })}
       </svg>
-      {boxes.filter((p) => !(p.box!.points && p.box!.points!.length >= 3)).map((p) => {
+      {boxes.filter((p) => p.box && !(p.box.points && p.box.points.length >= 3)).map((p) => {
         const color = p.type === 'new' ? 'rgb(96,165,250)' : 'rgb(52,211,153)'
         return (
           <div
@@ -38,15 +57,18 @@ function PhotoLabels({ boxes }: { boxes: PartEntry[] }) {
           />
         )
       })}
-      {boxes.map((p) => (
-        <span
-          key={`lbl-${p.id}`}
-          className="absolute whitespace-nowrap text-[10px] font-semibold px-1.5 py-0.5 rounded bg-obsidian-950/90 text-white border border-white/10 pointer-events-none"
-          style={{ left: `${p.box!.x}%`, top: `${Math.max(0, p.box!.y)}%`, transform: 'translateY(-115%)' }}
-        >
-          {p.name}{p.price > 0 ? ` \u00b7 ${formatCurrency(p.price)}` : ''}
-        </span>
-      ))}
+      {boxes.map((p) => {
+        const anchor = anchorFor(p)
+        return (
+          <span
+            key={`lbl-${p.id}`}
+            className="absolute whitespace-nowrap text-[10px] font-semibold px-1.5 py-0.5 rounded bg-obsidian-950/90 text-white border border-white/10 pointer-events-none"
+            style={{ left: `${anchor.x}%`, top: `${anchor.y}%`, transform: 'translateY(-115%)' }}
+          >
+            {p.name}{p.price > 0 ? ` \u00b7 ${formatCurrency(p.price)}` : ''}
+          </span>
+        )
+      })}
     </>
   )
 }
@@ -198,7 +220,7 @@ export default function BuildSheet() {
         {photos.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
             {photos.map(([label, view, url]) => {
-              const boxes = parts.filter((p) => p.box && p.box.view === view)
+              const boxes = parts.filter((p) => (p.box && p.box.view === view) || (p.svg_path && p.view === view))
               return (
                 <button
                   key={label}
@@ -289,7 +311,7 @@ export default function BuildSheet() {
             </div>
             <div className="relative rounded-xl overflow-hidden select-none bg-black">
               <img src={enlarged.url} alt={enlarged.label} className="w-full h-auto block" />
-              <PhotoLabels boxes={parts.filter((p) => p.box && p.box.view === enlarged.view)} />
+              <PhotoLabels boxes={parts.filter((p) => (p.box && p.box.view === enlarged.view) || (p.svg_path && p.view === enlarged.view))} />
             </div>
           </div>
         </div>

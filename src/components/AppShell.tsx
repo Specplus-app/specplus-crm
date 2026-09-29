@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { supabase } from '../lib/supabase'
-import { LogOut, LayoutDashboard, Users, Shield, Car, Menu, X } from 'lucide-react'
+import { ShopBillingProvider, computeBilling, DEFAULT_BILLING, type ShopBillingState } from '../lib/billing'
+import { LogOut, LayoutDashboard, Users, Shield, Car, Menu, X, AlertTriangle, Clock } from 'lucide-react'
 
 export default function AppShell() {
   const { profile, signOut } = useAuth()
@@ -11,6 +12,7 @@ export default function AppShell() {
   const isAdmin = profile?.role === 'admin'
   const [shopLogo, setShopLogo] = useState<string | null>(null)
   const [shopName, setShopName] = useState<string | null>(null)
+  const [billing, setBilling] = useState<ShopBillingState>(DEFAULT_BILLING)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
   useEffect(() => {
@@ -19,10 +21,15 @@ export default function AppShell() {
 
   useEffect(() => {
     if (isAdmin || !profile?.shop_id) return
-    supabase.from('shops').select('name, logo_url').eq('id', profile.shop_id).maybeSingle()
+    setBilling((b) => ({ ...b, loading: true }))
+    supabase.from('shops')
+      .select('name, logo_url, subscription_status, trial_ends_at, is_lifetime_free')
+      .eq('id', profile.shop_id)
+      .maybeSingle()
       .then(({ data }) => {
         setShopName(data?.name ?? null)
         setShopLogo(data?.logo_url ?? null)
+        setBilling(data ? computeBilling(data) : DEFAULT_BILLING)
       })
   }, [isAdmin, profile?.shop_id])
 
@@ -169,7 +176,23 @@ export default function AppShell() {
         </header>
 
         <main className="flex-1 min-h-0 overflow-y-auto bg-obsidian-950 text-slate-100 flex flex-col">
-          <Outlet />
+          {!isAdmin && billing.readOnly && (
+            <div className="flex items-center gap-2.5 bg-red-600 text-white px-4 sm:px-8 py-3 text-sm font-medium">
+              <AlertTriangle size={18} className="flex-shrink-0" />
+              <span>Your trial has expired. Please upgrade to create new records.</span>
+            </div>
+          )}
+          {!isAdmin && billing.isTrialing && (
+            <div className="flex items-center gap-2.5 bg-cobalt-500/10 border-b border-cobalt-500/20 text-cobalt-200 px-4 sm:px-8 py-2.5 text-sm font-medium">
+              <Clock size={16} className="flex-shrink-0 text-cobalt-400" />
+              <span>
+                {billing.trialDaysLeft} {billing.trialDaysLeft === 1 ? 'day' : 'days'} left in your free trial
+              </span>
+            </div>
+          )}
+          <ShopBillingProvider value={billing}>
+            <Outlet />
+          </ShopBillingProvider>
         </main>
       </div>
     </div>

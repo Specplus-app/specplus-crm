@@ -48,12 +48,12 @@ export default function AdminDashboard() {
     : shops
 
   const tierColors: Record<string, string> = {
-    starter: 'bg-zinc-100 text-zinc-600',
+    basic: 'bg-zinc-100 text-zinc-600',
     pro: 'bg-blue-100 text-blue-700',
-    enterprise: 'bg-emerald-100 text-emerald-700',
   }
   const statusColors: Record<string, string> = {
     trial: 'bg-amber-100 text-amber-700',
+    trialing: 'bg-amber-100 text-amber-700',
     active: 'bg-emerald-100 text-emerald-700',
     suspended: 'bg-red-100 text-red-700',
     cancelled: 'bg-zinc-100 text-zinc-500',
@@ -164,7 +164,7 @@ function CreateShopModal({ onClose, onCreated }: { onClose: () => void; onCreate
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [phone, setPhone] = useState('')
-  const [tier, setTier] = useState('starter')
+  const [tier, setTier] = useState('basic')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -177,7 +177,7 @@ function CreateShopModal({ onClose, onCreated }: { onClose: () => void; onCreate
       contact_email: email.trim(),
       phone: phone.trim() || null,
       subscription_tier: tier,
-      subscription_status: 'trial',
+      subscription_status: 'trialing',
     })
     if (error) {
       setError(error.message)
@@ -244,9 +244,8 @@ function CreateShopModal({ onClose, onCreated }: { onClose: () => void; onCreate
               onChange={(e) => setTier(e.target.value)}
               className="w-full bg-obsidian-950 border border-white/10 text-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-cobalt-500/50 focus:ring-1 focus:ring-cobalt-500/50 transition-all"
             >
-              <option value="starter">Starter</option>
+              <option value="basic">Basic</option>
               <option value="pro">Pro</option>
-              <option value="enterprise">Enterprise</option>
             </select>
           </div>
           <button
