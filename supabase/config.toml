@@ -1,11 +1,14 @@
 [functions.admin-impersonate]
-verify_jwt = true
+verify_jwt = false
 
 [functions.admin-create-user]
-verify_jwt = true
+verify_jwt = false
 
 [functions.bootstrap-admin]
 verify_jwt = false
 
 [functions.send-build-sheet]
 verify_jwt = true
+
+[functions.signup-shop]
+verify_jwt = false

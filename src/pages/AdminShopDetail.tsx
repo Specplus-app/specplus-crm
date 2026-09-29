@@ -140,16 +140,16 @@ export default function AdminShopDetail() {
                 onChange={(e) => handleUpdateShop({ subscription_tier: e.target.value as Shop['subscription_tier'] })}
                 className="bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-1.5 text-sm font-medium focus:outline-none focus:border-brand-500"
               >
-                <option value="starter">Starter</option>
+                <option value="basic">Basic</option>
                 <option value="pro">Pro</option>
-                <option value="enterprise">Enterprise</option>
               </select>
               <select
                 value={shop.subscription_status}
                 onChange={(e) => handleUpdateShop({ subscription_status: e.target.value as Shop['subscription_status'] })}
                 className="bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-1.5 text-sm font-medium focus:outline-none focus:border-brand-500"
               >
-                <option value="trial">Trial</option>
+                <option value="trialing">Trial</option>
+                {shop.subscription_status === 'trial' && <option value="trial">Trial (legacy)</option>}
                 <option value="active">Active</option>
                 <option value="suspended">Suspended</option>
                 <option value="cancelled">Cancelled</option>

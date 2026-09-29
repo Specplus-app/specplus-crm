@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
+import { useShopBilling } from '../lib/billing'
 import { supabase, Vehicle, formatDate, SHIP_SIZES, ShipSize, DEFAULT_LEAD_TIME_MULTIPLIER } from '../lib/supabase'
 import { Plus, Car, Edit3, Trash2, Eye, EyeOff, ChevronRight, X, Truck, Save, Clock, Image as ImageIcon, Upload, Code, Copy, Check } from 'lucide-react'
 
@@ -8,6 +9,7 @@ type VehicleWithParts = Vehicle & { part_count?: number }
 
 export default function ShopVehicles() {
   const { profile } = useAuth()
+  const { readOnly } = useShopBilling()
   const navigate = useNavigate()
   const [vehicles, setVehicles] = useState<VehicleWithParts[]>([])
   const [loading, setLoading] = useState(true)
@@ -155,13 +157,15 @@ export default function ShopVehicles() {
             <h1 className="text-2xl font-bold text-zinc-900">Vehicles</h1>
             <p className="text-sm text-zinc-500 mt-1">Upload vehicle photos, trace parts, and publish for customers</p>
           </div>
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 text-white text-sm font-medium rounded-lg px-4 py-2.5 transition-colors"
-          >
-            <Plus size={16} />
-            Add Vehicle
-          </button>
+          {!readOnly && (
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 text-white text-sm font-medium rounded-lg px-4 py-2.5 transition-colors"
+            >
+              <Plus size={16} />
+              Add Vehicle
+            </button>
+          )}
         </div>
 
         {loading ? (
@@ -220,16 +224,18 @@ export default function ShopVehicles() {
                       onClick={() => navigate(`/dashboard/vehicles/${vehicle.id}`)}
                       className="flex items-center gap-1.5 text-sm font-medium text-brand-600 hover:text-brand-700 bg-brand-50 hover:bg-brand-100 rounded-lg px-3 py-1.5 transition-colors"
                     >
-                      <Edit3 size={14} />
-                      Edit
+                      {readOnly ? <Eye size={14} /> : <Edit3 size={14} />}
+                      {readOnly ? 'View' : 'Edit'}
                     </button>
-                    <button
-                      onClick={() => handleTogglePublish(vehicle)}
-                      className="flex items-center gap-1.5 text-sm font-medium text-zinc-600 hover:text-zinc-700 bg-zinc-100 hover:bg-zinc-200 rounded-lg px-3 py-1.5 transition-colors"
-                    >
-                      {vehicle.status === 'published' ? <EyeOff size={14} /> : <Eye size={14} />}
-                      {vehicle.status === 'published' ? 'Unpublish' : 'Publish'}
-                    </button>
+                    {!readOnly && (
+                      <button
+                        onClick={() => handleTogglePublish(vehicle)}
+                        className="flex items-center gap-1.5 text-sm font-medium text-zinc-600 hover:text-zinc-700 bg-zinc-100 hover:bg-zinc-200 rounded-lg px-3 py-1.5 transition-colors"
+                      >
+                        {vehicle.status === 'published' ? <EyeOff size={14} /> : <Eye size={14} />}
+                        {vehicle.status === 'published' ? 'Unpublish' : 'Publish'}
+                      </button>
+                    )}
                     <button
                       onClick={() => setEmbedVehicle(vehicle)}
                       className="flex items-center gap-1.5 text-sm font-medium text-zinc-600 hover:text-zinc-700 bg-zinc-100 hover:bg-zinc-200 rounded-lg px-3 py-1.5 transition-colors"
@@ -237,12 +243,14 @@ export default function ShopVehicles() {
                       <Code size={14} />
                       Embed on Website
                     </button>
-                    <button
-                      onClick={() => handleDelete(vehicle)}
-                      className="flex items-center gap-1.5 text-sm font-medium text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 rounded-lg px-3 py-1.5 transition-colors ml-auto"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    {!readOnly && (
+                      <button
+                        onClick={() => handleDelete(vehicle)}
+                        className="flex items-center gap-1.5 text-sm font-medium text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 rounded-lg px-3 py-1.5 transition-colors ml-auto"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -268,6 +276,9 @@ export default function ShopVehicles() {
               )}
             </div>
             <div className="min-w-0">
+              {readOnly ? (
+                <p className="text-sm text-zinc-500">Your trial has expired. Upgrade to change your logo.</p>
+              ) : (
               <div className="flex flex-wrap items-center gap-2">
                 <label className={`flex items-center gap-2 text-sm font-medium rounded-lg px-4 py-2 transition-colors cursor-pointer ${
                   logoUploading ? 'bg-zinc-100 text-zinc-400 cursor-not-allowed' : 'bg-zinc-900 hover:bg-zinc-800 text-white'
@@ -296,6 +307,7 @@ export default function ShopVehicles() {
                   </button>
                 )}
               </div>
+              )}
               <p className="text-xs text-zinc-400 mt-2">PNG or JPG, up to 3 MB. A transparent PNG looks best.</p>
               {logoError && <p className="text-sm text-red-600 mt-1">{logoError}</p>}
             </div>
@@ -353,8 +365,8 @@ export default function ShopVehicles() {
               <div className="flex items-center gap-3 mt-4">
                 <button
                   onClick={handleSaveRates}
-                  disabled={ratesSaving}
-                  className="flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+                  disabled={ratesSaving || readOnly}
+                  className="flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
                 >
                   <Save size={14} />
                   {ratesSaving ? 'Saving…' : 'Save Settings'}

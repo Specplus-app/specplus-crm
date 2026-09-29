@@ -910,6 +910,8 @@ function CustomCheckoutModal({
           </div>
           <Field label="Target Start Date" icon={Calendar}>
             <input type="date" value={targetStartDate} onChange={(e) => onTargetStartDate(e.target.value)}
+              onFocus={(e) => { try { e.currentTarget.showPicker() } catch { /* not supported */ } }}
+              onClick={(e) => { try { e.currentTarget.showPicker() } catch { /* not supported */ } }}
               className="w-full bg-obsidian-950/80 border border-white/10 text-slate-100 rounded-xl pl-11 pr-4 py-3 focus:outline-none focus:border-cobalt-500/50 focus:ring-2 focus:ring-cobalt-500/20 transition-all" />
           </Field>
           <div>

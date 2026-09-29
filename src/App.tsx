@@ -31,6 +31,7 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/signup" element={<LoginPage mode="signup" />} />
       <Route path="/lead/:shopId" element={<LegacyLeadRedirect />} />
       <Route path="/customize/:shopId" element={<CustomerCustomizer />} />
       <Route path="/embed/vehicle/:vehicleId" element={<VehicleEmbed />} />

@@ -4,6 +4,7 @@ type Props = {
   status: LeadStatus
   onChange: (status: LeadStatus) => void
   size?: 'sm' | 'md'
+  disabled?: boolean
 }
 
 const STATUS_OPTIONS: { value: LeadStatus; label: string; dotColor: string }[] = [
@@ -15,7 +16,7 @@ const STATUS_OPTIONS: { value: LeadStatus; label: string; dotColor: string }[] =
   { value: 'archived', label: 'Archived', dotColor: 'bg-zinc-400' },
 ]
 
-export default function StatusSelect({ status, onChange, size = 'md' }: Props) {
+export default function StatusSelect({ status, onChange, size = 'md', disabled = false }: Props) {
   const current = STATUS_OPTIONS.find((s) => s.value === status) ?? STATUS_OPTIONS[0]
   const sizeClasses = size === 'sm' ? 'text-xs px-2.5 py-1' : 'text-sm px-3 py-1.5'
 
@@ -23,8 +24,9 @@ export default function StatusSelect({ status, onChange, size = 'md' }: Props) {
     <div className="relative inline-block">
       <select
         value={status}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.value as LeadStatus)}
-        className={`appearance-none rounded-full border border-zinc-300 bg-white font-medium text-zinc-700 pr-8 pl-7 ${sizeClasses} cursor-pointer hover:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-all`}
+        className={`appearance-none rounded-full border border-zinc-300 bg-white font-medium text-zinc-700 pr-8 pl-7 ${sizeClasses} ${disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:border-zinc-400'} focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-all`}
       >
         {STATUS_OPTIONS.map((s) => (
           <option key={s.value} value={s.value}>{s.label}</option>

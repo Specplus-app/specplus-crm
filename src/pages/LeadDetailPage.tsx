@@ -1,13 +1,17 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
-import { supabase, Lead, LeadNote, LeadStatus, PartEntry, ShipSize, formatCurrency, formatDate, formatDateTime, getHighlightColor, estimateLeadTimeDays, DEFAULT_LEAD_TIME_MULTIPLIER } from '../lib/supabase'
+import { supabase, Lead, LeadNote, LeadStatus, PartEntry, ShipSize, formatCurrency, formatDate, formatDateTime, getHighlightColor, svgPathAnchor, estimateLeadTimeDays, DEFAULT_LEAD_TIME_MULTIPLIER } from '../lib/supabase'
 import StatusSelect from '../components/StatusSelect'
+import { useShopBilling } from '../lib/billing'
 import ShopCustomPricingModal from '../components/ShopCustomPricingModal'
 import { ArrowLeft, Mail, Phone, MapPin, Calendar, DollarSign, Package, Send, User, Clock, Layers, Palette, Image as ImageIcon, PencilRuler, Loader2, Check, AlertCircle, type LucideIcon } from 'lucide-react'
 
 const customUploadUrl = (path: string | null): string | null =>
   path ? supabase.storage.from('customer-uploads').getPublicUrl(path).data.publicUrl : null
+
+const vehicleImageUrl = (path: string | null): string | null =>
+  path ? supabase.storage.from('vehicles').getPublicUrl(path).data.publicUrl : null
 
 const DEFAULT_SHIP_RATES: Record<ShipSize, number> = { small: 0, medium: 0, large: 0, 'x-large': 0 }
 
@@ -69,9 +73,44 @@ function PhotoOverlays({ boxes, onPick }: { boxes: PartEntry[]; onPick: (p: Part
   )
 }
 
+function TemplateOverlays({ parts }: { parts: PartEntry[] }) {
+  return (
+    <>
+      <svg className="absolute inset-0 w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+        {parts.map((p) => {
+          const c = getHighlightColor(p.highlight_color ?? 'green')
+          return (
+            <path
+              key={p.id}
+              d={p.svg_path!}
+              fill={c.fill}
+              stroke={c.stroke}
+              strokeWidth={0.4}
+              vectorEffect="non-scaling-stroke"
+            />
+          )
+        })}
+      </svg>
+      {parts.map((p) => {
+        const a = svgPathAnchor(p.svg_path!)
+        return (
+          <span
+            key={`lbl-${p.id}`}
+            className="absolute whitespace-nowrap text-[10px] font-semibold px-1.5 py-0.5 rounded bg-zinc-900/90 text-white pointer-events-none"
+            style={{ left: `${a.x}%`, top: `${a.y}%`, transform: 'translateY(-115%)' }}
+          >
+            {p.name}{p.price > 0 ? ` \u00b7 ${formatCurrency(p.price)}` : ''}
+          </span>
+        )
+      })}
+    </>
+  )
+}
+
 export default function LeadDetailPage() {
   const { leadId } = useParams<{ leadId: string }>()
   const { profile } = useAuth()
+  const { readOnly } = useShopBilling()
   const navigate = useNavigate()
   const [lead, setLead] = useState<Lead | null>(null)
   const [notes, setNotes] = useState<LeadNote[]>([])
@@ -86,6 +125,8 @@ export default function LeadDetailPage() {
   const [shopInfo, setShopInfo] = useState<{ name: string; logo_url: string | null; contact_email: string | null }>({ name: '', logo_url: null, contact_email: null })
   const [sendingEmail, setSendingEmail] = useState(false)
   const [emailStatus, setEmailStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const [templateImages, setTemplateImages] = useState<{ front: string | null; rear: string | null }>({ front: null, rear: null })
+  const [partShapes, setPartShapes] = useState<Map<string, { svg_path: string | null; view: 'front' | 'rear' }>>(new Map())
 
   const loadLead = useCallback(async () => {
     if (!leadId) return
@@ -140,6 +181,27 @@ export default function LeadDetailPage() {
         setShopInfo({ name: data?.name ?? '', logo_url: data?.logo_url ?? null, contact_email: data?.contact_email ?? null })
       })
   }, [profile?.shop_id])
+
+  // For pre-configured vehicles the customer uploads no photos, so load the
+  // vehicle template images and each part's highlight shape to display them.
+  useEffect(() => {
+    const uploaded = customUploadUrl(lead?.front_image_url ?? null) || customUploadUrl(lead?.rear_image_url ?? null)
+    if (!lead || uploaded || !lead.vehicle_id) return
+    let active = true
+    ;(async () => {
+      const [{ data: vehicle }, { data: vehicleParts }] = await Promise.all([
+        supabase.from('vehicles').select('front_image_path, rear_image_path').eq('id', lead.vehicle_id).maybeSingle(),
+        supabase.from('vehicle_parts').select('id, svg_path, view').eq('vehicle_id', lead.vehicle_id),
+      ])
+      if (!active) return
+      setTemplateImages({
+        front: vehicleImageUrl(vehicle?.front_image_path ?? null),
+        rear: vehicleImageUrl(vehicle?.rear_image_path ?? null),
+      })
+      setPartShapes(new Map((vehicleParts ?? []).map((v) => [v.id, { svg_path: v.svg_path, view: v.view as 'front' | 'rear' }])))
+    })()
+    return () => { active = false }
+  }, [lead])
 
   const handleSavePrice = async (updated: PartEntry) => {
     if (!lead) return
@@ -234,10 +296,40 @@ export default function LeadDetailPage() {
   const parts: PartEntry[] =
     Array.isArray(lead.selected_parts) ? lead.selected_parts : []
 
+  const enrichedParts: PartEntry[] = parts.map((p) => {
+    if (p.box) return p
+    const shape = partShapes.get(p.id)
+    return shape?.svg_path ? { ...p, svg_path: shape.svg_path, view: shape.view } : p
+  })
+  const hasTemplatePhotos = !lead.is_custom && (templateImages.front || templateImages.rear)
+
   const handleEmailBuildSheet = async () => {
     if (!lead || sendingEmail) return
     setSendingEmail(true)
     setEmailStatus(null)
+
+    // Prefer the customer's uploaded photos (custom builds). For pre-configured
+    // vehicles the customer doesn't upload anything, so fall back to the vehicle
+    // template's own front/rear images.
+    let frontUrl = customUploadUrl(lead.front_image_url)
+    let rearUrl = customUploadUrl(lead.rear_image_url)
+    let sheetParts = parts
+    if (!frontUrl && !rearUrl && lead.vehicle_id) {
+      const [{ data: vehicle }, { data: vehicleParts }] = await Promise.all([
+        supabase.from('vehicles').select('front_image_path, rear_image_path').eq('id', lead.vehicle_id).maybeSingle(),
+        supabase.from('vehicle_parts').select('id, svg_path, view').eq('vehicle_id', lead.vehicle_id),
+      ])
+      frontUrl = vehicleImageUrl(vehicle?.front_image_path ?? null)
+      rearUrl = vehicleImageUrl(vehicle?.rear_image_path ?? null)
+      // Carry each selected part's highlight shape so the build sheet can draw
+      // the same colored overlays the customer saw on the vehicle photos.
+      const shapeById = new Map((vehicleParts ?? []).map((v) => [v.id, v]))
+      sheetParts = parts.map((p) => {
+        if (p.box) return p
+        const shape = shapeById.get(p.id)
+        return shape?.svg_path ? { ...p, svg_path: shape.svg_path, view: shape.view as 'front' | 'rear' } : p
+      })
+    }
 
     const { data: sheet, error: saveError } = await supabase
       .from('build_sheets')
@@ -256,9 +348,9 @@ export default function LeadDetailPage() {
         paint_code: lead.paint_code,
         fulfillment_mode: lead.fulfillment_mode,
         is_custom: lead.is_custom,
-        front_image_url: customUploadUrl(lead.front_image_url),
-        rear_image_url: customUploadUrl(lead.rear_image_url),
-        selected_parts: parts,
+        front_image_url: frontUrl,
+        rear_image_url: rearUrl,
+        selected_parts: sheetParts,
         parts_total: lead.parts_total,
         shipping_total: lead.shipping_total,
         grand_total: lead.grand_total,
@@ -329,7 +421,7 @@ export default function LeadDetailPage() {
                 )}
               </div>
             </div>
-            <StatusSelect status={lead.status} onChange={handleStatusChange} />
+            <StatusSelect status={lead.status} onChange={handleStatusChange} disabled={readOnly} />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -347,6 +439,7 @@ export default function LeadDetailPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2 mt-5 pt-5 border-t border-zinc-100">
+            {!readOnly && (
             <button
               onClick={handleEmailBuildSheet}
               disabled={sendingEmail}
@@ -355,6 +448,7 @@ export default function LeadDetailPage() {
               {sendingEmail ? <Loader2 size={15} className="animate-spin" /> : <Mail size={15} />}
               {sendingEmail ? 'Sending…' : 'Email Build Sheet'}
             </button>
+            )}
             {lead.customer_phone && (
               <a
                 href={`tel:${lead.customer_phone}`}
@@ -397,6 +491,35 @@ export default function LeadDetailPage() {
                     <div className="relative rounded-lg overflow-hidden border border-zinc-200 select-none">
                       <img src={url} alt={label} className="w-full h-auto block" />
                       <PhotoOverlays boxes={boxes} onPick={setPricingItem} />
+                    </div>
+                    <div className="flex items-center justify-between mt-1">
+                      <span className="text-xs text-zinc-500">{label}</span>
+                      <button onClick={() => setEnlarged({ url, label, view })} className="text-xs text-brand-600 hover:underline">Enlarge</button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Vehicle photos with selected-part highlights (pre-configured builds) */}
+        {hasTemplatePhotos && (
+          <div className="bg-white rounded-2xl border border-zinc-200 p-6 mb-4">
+            <h2 className="text-sm font-semibold text-zinc-900 mb-1 flex items-center gap-2">
+              <ImageIcon size={16} className="text-zinc-400" />
+              Selected Parts
+            </h2>
+            <p className="text-xs text-zinc-500 mb-3">The areas the customer chose, highlighted on the vehicle.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {([['Front 3/4', 'front', templateImages.front], ['Rear', 'rear', templateImages.rear]] as const).map(([label, view, url]) => {
+                if (!url) return null
+                const shapes = enrichedParts.filter((p) => p.svg_path && p.view === view)
+                return (
+                  <div key={label}>
+                    <div className="relative rounded-lg overflow-hidden border border-zinc-200 select-none">
+                      <img src={url} alt={label} className="w-full h-auto block" />
+                      <TemplateOverlays parts={shapes} />
                     </div>
                     <div className="flex items-center justify-between mt-1">
                       <span className="text-xs text-zinc-500">{label}</span>
@@ -507,6 +630,9 @@ export default function LeadDetailPage() {
                       <span className="text-sm text-zinc-700 truncate">{part.name}</span>
                     </div>
                     {lead.is_custom ? (
+                      readOnly ? (
+                        <span className="text-sm font-medium text-zinc-900 flex-shrink-0">{part.priced ? formatCurrency(part.price) : '—'}</span>
+                      ) : (
                       <button
                         onClick={() => setPricingItem(part)}
                         className={`text-sm font-medium flex-shrink-0 rounded-md px-2.5 py-1 transition-colors ${
@@ -517,6 +643,7 @@ export default function LeadDetailPage() {
                       >
                         {part.priced ? formatCurrency(part.price) : 'Set price'}
                       </button>
+                      )
                     ) : (
                       <span className="text-sm font-medium text-zinc-900 flex-shrink-0">{formatCurrency(part.price)}</span>
                     )}
@@ -574,13 +701,14 @@ export default function LeadDetailPage() {
             <textarea
               value={newNote}
               onChange={(e) => setNewNote(e.target.value)}
-              placeholder="Add a note about this lead…"
+              placeholder={readOnly ? 'Notes are read-only while your trial is expired' : 'Add a note about this lead…'}
               rows={2}
-              className="flex-1 bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition-colors resize-none"
+              disabled={readOnly}
+              className="flex-1 bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition-colors resize-none disabled:opacity-60 disabled:cursor-not-allowed"
             />
             <button
               onClick={handleAddNote}
-              disabled={!newNote.trim() || submittingNote}
+              disabled={!newNote.trim() || submittingNote || readOnly}
               className="self-end bg-brand-600 hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors flex items-center gap-1.5"
             >
               <Send size={14} />
@@ -635,6 +763,7 @@ export default function LeadDetailPage() {
             <div className="relative rounded-lg overflow-hidden select-none bg-black">
               <img src={enlarged.url} alt={enlarged.label} className="w-full h-auto block" />
               <PhotoOverlays boxes={parts.filter((p) => p.box && p.box.view === enlarged.view)} onPick={setPricingItem} />
+              <TemplateOverlays parts={enrichedParts.filter((p) => p.svg_path && p.view === enlarged.view)} />
             </div>
           </div>
         </div>

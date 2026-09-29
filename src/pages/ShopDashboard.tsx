@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { supabase, Lead, LeadStatus, formatCurrency, formatDate } from '../lib/supabase'
 import StatusSelect from '../components/StatusSelect'
+import { useShopBilling } from '../lib/billing'
 import { LoadingScreen } from '../components/LoadingScreen'
-import { Search, Inbox, TrendingUp, Clock, CheckCircle2, Mail, Phone, MapPin, ChevronRight, Link2, Copy, Check, ExternalLink, type LucideIcon } from 'lucide-react'
+import { Search, Inbox, TrendingUp, Clock, CheckCircle2, Mail, Phone, MapPin, ChevronRight, Link2, Copy, Check, ExternalLink, PartyPopper, X, type LucideIcon } from 'lucide-react'
 
 const STATUS_FILTERS: { value: LeadStatus | 'all'; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -19,6 +20,9 @@ const STATUS_FILTERS: { value: LeadStatus | 'all'; label: string }[] = [
 export default function ShopDashboard() {
   const { profile, profileLoading } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
+  const { readOnly } = useShopBilling()
+  const [showWelcome, setShowWelcome] = useState(Boolean((location.state as { welcome?: boolean } | null)?.welcome))
   const [leads, setLeads] = useState<Lead[]>([])
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState<LeadStatus | 'all'>('all')
@@ -37,6 +41,14 @@ export default function ShopDashboard() {
       setCopied(false)
     }
   }
+
+  useEffect(() => {
+    if (showWelcome) {
+      // Drop the router state so a refresh doesn't re-trigger the banner.
+      navigate(location.pathname, { replace: true })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const loadLeads = useCallback(async () => {
     if (!profile?.shop_id) return
@@ -119,6 +131,25 @@ export default function ShopDashboard() {
           <h1 className="text-2xl font-bold text-slate-100">Leads</h1>
           <p className="text-sm text-slate-400 mt-1">Customer submissions from your vehicle customizer</p>
         </div>
+
+        {showWelcome && (
+          <div className="flex items-start gap-3 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4 mb-6 animate-fade-in">
+            <PartyPopper size={20} className="text-emerald-400 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <h2 className="text-sm font-semibold text-emerald-200">Welcome to SpecPlus{profile?.full_name ? `, ${profile.full_name.split(' ')[0]}` : ''}!</h2>
+              <p className="text-xs text-emerald-300/80 mt-1 leading-relaxed">
+                Your shop account is ready. Share your customer link below to start collecting quote requests, then add your vehicles to build them out.
+              </p>
+            </div>
+            <button
+              onClick={() => setShowWelcome(false)}
+              className="text-emerald-300/70 hover:text-emerald-200 transition-colors"
+              aria-label="Dismiss"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
 
         {/* Shareable customer link */}
         <div className="bg-obsidian-900/50 border border-white/10 rounded-2xl p-4 mb-6">
@@ -251,7 +282,7 @@ export default function ShopDashboard() {
                     </div>
                   </div>
                   <div onClick={(e) => e.stopPropagation()}>
-                    <StatusSelect status={lead.status} onChange={(s) => handleStatusChange(lead.id, s)} size="sm" />
+                    <StatusSelect status={lead.status} onChange={(s) => handleStatusChange(lead.id, s)} size="sm" disabled={readOnly} />
                   </div>
                 </div>
               </div>

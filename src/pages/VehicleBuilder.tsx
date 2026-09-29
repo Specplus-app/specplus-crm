@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
+import { useShopBilling } from '../lib/billing'
 import { supabase, Vehicle, Shop, VehiclePart, PartGroup, PartPaintStyle, PartOption, formatCurrency, HIGHLIGHT_COLORS, getHighlightColor, ShipSize, SHIP_SIZES, shipSizeRank, estimateLeadTimeDays, DEFAULT_LEAD_TIME_MULTIPLIER } from '../lib/supabase'
 import { pickPartAtPoint } from '../lib/svgHit'
 import { ArrowLeft, Upload, Plus, Trash2, Save, Eye, EyeOff, Car, X, Image as ImageIcon, GitMerge, ChevronRight, Play, Check, Layers, ZoomIn, ZoomOut, Maximize2, MousePointer2, Square, Hand, Undo2, PenTool, Palette, ChevronUp, ChevronDown, Clock } from 'lucide-react'
@@ -27,6 +28,7 @@ const STORAGE_BUCKET = 'vehicles'
 export default function VehicleBuilder() {
   const { vehicleId } = useParams<{ vehicleId: string }>()
   const { profile } = useAuth()
+  const { readOnly } = useShopBilling()
   const navigate = useNavigate()
   const location = useLocation()
   const templateRoute = location.pathname.startsWith('/admin')
@@ -144,6 +146,7 @@ export default function VehicleBuilder() {
   }, [currentImageUrl])
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, view: 'front' | 'rear') => {
+    if (readOnly) return
     const file = e.target.files?.[0]
     if (!file || !vehicle) return
     if (!isTemplate && !profile?.shop_id) return
@@ -290,6 +293,7 @@ export default function VehicleBuilder() {
   }
 
   const saveEditedShape = async () => {
+    if (readOnly) return
     if (!editShapePartId || editPoints.length < 3) return
     const svgPath = pointsToSvgPath(editPoints)
     const { error } = await supabase.from('vehicle_parts').update({ svg_path: svgPath }).eq('id', editShapePartId)
@@ -334,6 +338,7 @@ export default function VehicleBuilder() {
   }
 
   const handleSavePart = async () => {
+    if (readOnly) return
     if (!vehicleId || !partForm.name.trim()) return
 
     if (partForm.group_id) {
@@ -456,6 +461,7 @@ export default function VehicleBuilder() {
   }
 
   const handleDeletePart = async (partId: string) => {
+    if (readOnly) return
     if (!confirm('Delete this part?')) return
     const { error } = await supabase.from('vehicle_parts').delete().eq('id', partId)
     if (error) {
@@ -467,6 +473,7 @@ export default function VehicleBuilder() {
   }
 
   const handleTogglePublish = async () => {
+    if (readOnly) return
     if (!vehicle) return
     const newStatus = vehicle.status === 'published' ? 'draft' : 'published'
     const { error } = await supabase.from('vehicles').update({ status: newStatus }).eq('id', vehicle.id)
@@ -479,6 +486,7 @@ export default function VehicleBuilder() {
 
   // ── Group CRUD ────────────────────────────────────────────────────────────
   const handleCreateGroup = async () => {
+    if (readOnly) return
     if (!vehicleId || !newGroupName.trim()) return
     const maxOrder = Math.max(0, ...groups.map((g) => g.sort_order))
     const { data, error } = await supabase.from('part_groups')
@@ -493,6 +501,7 @@ export default function VehicleBuilder() {
   }
 
   const handleDeleteGroup = async (groupId: string) => {
+    if (readOnly) return
     if (!confirm('Delete this group? Parts will remain but become standalone (no group pricing).')) return
     await supabase.from('vehicle_parts').update({ group_id: null }).eq('group_id', groupId)
     const { error } = await supabase.from('part_groups').delete().eq('id', groupId)
@@ -529,6 +538,7 @@ export default function VehicleBuilder() {
   }
 
   const handleMergeParts = async () => {
+    if (readOnly) return
     if (mergeSelection.length < 2 || !mergePrimaryChoice) return
     setMerging(true)
 
@@ -575,6 +585,7 @@ export default function VehicleBuilder() {
   }
 
   const handleReorderPart = async (partId: string, direction: 'up' | 'down') => {
+    if (readOnly) return
     const list = parts
       .filter((p) => p.view === activeView && !p.group_id)
       .sort((a, b) => a.sort_order - b.sort_order)
@@ -624,6 +635,12 @@ export default function VehicleBuilder() {
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="p-6 max-w-6xl mx-auto">
+        {readOnly && (
+          <div className="flex items-center gap-2.5 bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 mb-4 text-sm font-medium">
+            <EyeOff size={16} className="flex-shrink-0" />
+            <span>Your trial has expired. This build is view-only — upgrade to make changes.</span>
+          </div>
+        )}
         <div className="flex items-center justify-between mb-4">
           <button
             onClick={() => navigate(templateRoute ? '/admin/templates' : '/dashboard/vehicles')}
@@ -643,7 +660,8 @@ export default function VehicleBuilder() {
           ) : (
             <button
               onClick={handleTogglePublish}
-              className={`flex items-center gap-2 text-sm font-medium rounded-lg px-4 py-2 transition-colors ${
+              disabled={readOnly}
+              className={`flex items-center gap-2 text-sm font-medium rounded-lg px-4 py-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                 vehicle.status === 'published'
                   ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
                   : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'

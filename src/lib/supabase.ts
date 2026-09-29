@@ -27,8 +27,10 @@ export type Shop = {
   contact_email: string
   phone: string | null
   address: string | null
-  subscription_status: 'trial' | 'active' | 'suspended' | 'cancelled'
-  subscription_tier: 'starter' | 'pro' | 'enterprise'
+  subscription_status: 'trial' | 'trialing' | 'active' | 'suspended' | 'cancelled'
+  subscription_tier: 'basic' | 'pro'
+  trial_ends_at: string
+  is_lifetime_free: boolean
   customizer_config: Record<string, unknown>
   created_at: string
   updated_at: string
@@ -115,6 +117,8 @@ export type PartEntry = {
   notes?: string | null
   reference_image_path?: string | null
   box?: CustomPartBox | null
+  svg_path?: string | null
+  view?: 'front' | 'rear'
   part_cost?: number | null
   paint_price?: number | null
   ship_size?: ShipSize
@@ -223,6 +227,20 @@ export const HIGHLIGHT_COLORS: { value: HighlightColor; label: string; fill: str
 
 export function getHighlightColor(color: string) {
   return HIGHLIGHT_COLORS.find((c) => c.value === color) ?? HIGHLIGHT_COLORS[0]
+}
+
+// Rough top-left anchor for a part's highlight shape (drawn in a 0..100 viewBox),
+// used to place its name/price label near the shape.
+export function svgPathAnchor(d: string): { x: number; y: number } {
+  const nums = d.match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? []
+  let minX = Infinity
+  let minY = Infinity
+  for (let i = 0; i + 1 < nums.length; i += 2) {
+    minX = Math.min(minX, nums[i])
+    minY = Math.min(minY, nums[i + 1])
+  }
+  if (minX === Infinity) return { x: 2, y: 6 }
+  return { x: minX, y: Math.max(0, minY) }
 }
 
 export const LEAD_STATUSES: { value: LeadStatus; label: string; color: string }[] = [
