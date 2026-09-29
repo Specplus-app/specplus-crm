@@ -136,6 +136,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) return { error: error.message }
     const token = data.session?.access_token
     if (!token) return { error: 'Account created. Check your email to verify your address, then sign in.' }
+    if (!data.user) return { error: 'Account created, but the user record was not returned. Please sign in.' }
 
     // A brand-new shop_user cannot insert a shop directly (RLS restricts shop
     // creation to admins), so a service-role edge function creates the shop and
