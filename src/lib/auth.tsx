@@ -47,20 +47,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     requestedShopName?: string,
     requestedFullName?: string,
   ): Promise<string | null> => {
-    const { data: existingProfile, error: profileError } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', authUser.id)
-      .maybeSingle()
-
-    if (profileError) return profileError.message
-    if (!existingProfile) return 'Your profile could not be found. Please contact support.'
-
-    if (existingProfile.role !== 'shop_user' || existingProfile.shop_id) {
-      setProfile(existingProfile as Profile)
-      return null
-    }
-
     const metadataShopName = typeof authUser.user_metadata?.shop_name === 'string'
       ? authUser.user_metadata.shop_name.trim()
       : ''
@@ -68,12 +54,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ? authUser.user_metadata.full_name.trim()
       : ''
     const shopName = requestedShopName?.trim() || metadataShopName
-    const fullName = requestedFullName?.trim() || metadataFullName || existingProfile.full_name || ''
+    const fullName = requestedFullName?.trim() || metadataFullName
 
-    if (!shopName) {
-      return 'Your account is verified, but your shop setup is incomplete. Please contact support.'
-    }
+    // Accounts created by an admin (and the admin account itself) do not carry
+    // self-signup shop metadata, so there is nothing to finish for them.
+    if (!shopName) return null
 
+    // The service-role edge function can inspect the profile even while shop_id is
+    // NULL. The browser cannot reliably do that because production profile RLS is
+    // intentionally scoped to admins and users already attached to a shop.
     const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/signup-shop`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
@@ -85,9 +74,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return detail?.error ?? `Could not finish setting up your shop (${res.status}).`
     }
 
-    await loadProfile(authUser.id)
     return null
-  }, [loadProfile])
+  }, [])
 
   const refreshProfile = useCallback(async () => {
     if (user?.id) await loadProfile(user.id)
@@ -125,6 +113,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) return { error: error.message }
     if (!data.session || !data.user) return { error: 'Signed in, but no active session was returned. Please try again.' }
 
+    // For self-signups that required email verification, the initial sign-up had
+    // no session and could not call signup-shop. Complete that idempotent step now
+    // before loading the profile so production RLS can see the attached shop.
     const setupError = await finishPendingShopSetup(data.user, data.session.access_token)
     if (setupError) {
       await supabase.auth.signOut()
@@ -148,12 +139,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // A brand-new shop_user cannot insert a shop directly (RLS restricts shop
     // creation to admins), so a service-role edge function creates the shop and
-    // links it to this profile. The same helper also finishes setup after email
-    // verification when Supabase does not return a session during sign-up.
+    // links it to this profile. The same helper runs after email verification.
     const setupError = await finishPendingShopSetup(data.user, token, shopName, fullName)
     if (setupError) return { error: setupError }
+    await loadProfile(data.user.id)
     return { error: null }
-  }, [finishPendingShopSetup])
+  }, [finishPendingShopSetup, loadProfile])
 
   const signOut = useCallback(async () => {
     await supabase.auth.signOut()
