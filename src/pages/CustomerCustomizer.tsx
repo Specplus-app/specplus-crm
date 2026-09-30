@@ -23,8 +23,9 @@ type SelectedPart = {
 const STORAGE_BUCKET = 'vehicles'
 const US_STATES = ['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY']
 
-export default function CustomerCustomizer() {
-  const { shopId } = useParams<{ shopId: string }>()
+export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?: string } = {}) {
+  const { shopId: routeShopId } = useParams<{ shopId: string }>()
+  const shopId = shopIdOverride ?? routeShopId
   const navigate = useNavigate()
   const [shop, setShop] = useState<Shop | null>(null)
   const [vehicles, setVehicles] = useState<Vehicle[]>([])

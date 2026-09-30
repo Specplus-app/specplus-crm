@@ -23,6 +23,7 @@ export type Profile = {
 export type Shop = {
   id: string
   name: string
+  slug: string
   logo_url: string | null
   contact_email: string
   phone: string | null
