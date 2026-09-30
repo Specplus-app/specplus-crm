@@ -9,6 +9,7 @@ import AdminTemplates from './pages/AdminTemplates'
 import ShopVehicles from './pages/ShopVehicles'
 import VehicleBuilder from './pages/VehicleBuilder'
 import CustomerCustomizer from './pages/CustomerCustomizer'
+import PublicQuotePage from './pages/PublicQuotePage'
 import VehicleEmbed from './pages/VehicleEmbed'
 import BuildSheet from './pages/BuildSheet'
 import ProtectedRoute from './components/ProtectedRoute'
@@ -36,6 +37,7 @@ function AppRoutes() {
       <Route path="/customize/:shopId" element={<CustomerCustomizer />} />
       <Route path="/embed/vehicle/:vehicleId" element={<VehicleEmbed />} />
       <Route path="/build/:id" element={<BuildSheet />} />
+      <Route path="/:shopSlug" element={<PublicQuotePage />} />
       <Route
         path="/admin"
         element={

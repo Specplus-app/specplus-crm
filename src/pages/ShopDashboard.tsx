@@ -7,6 +7,8 @@ import { useShopBilling } from '../lib/billing'
 import { LoadingScreen } from '../components/LoadingScreen'
 import { Search, Inbox, TrendingUp, Clock, CheckCircle2, Mail, Phone, MapPin, ChevronRight, Link2, Copy, Check, ExternalLink, PartyPopper, X, type LucideIcon } from 'lucide-react'
 
+const PUBLIC_QUOTE_ORIGIN = 'https://quotes.specplus.app'
+
 const STATUS_FILTERS: { value: LeadStatus | 'all'; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'new', label: 'New' },
@@ -28,8 +30,13 @@ export default function ShopDashboard() {
   const [statusFilter, setStatusFilter] = useState<LeadStatus | 'all'>('all')
   const [search, setSearch] = useState('')
   const [copied, setCopied] = useState(false)
+  const [shopSlug, setShopSlug] = useState<string | null>(null)
 
-  const customerLink = profile?.shop_id ? `${window.location.origin}/customize/${profile.shop_id}` : ''
+  const customerLink = profile?.shop_id
+    ? shopSlug
+      ? `${PUBLIC_QUOTE_ORIGIN}/${shopSlug}`
+      : `${PUBLIC_QUOTE_ORIGIN}/customize/${profile.shop_id}`
+    : ''
 
   const copyLink = async () => {
     if (!customerLink) return
@@ -41,6 +48,31 @@ export default function ShopDashboard() {
       setCopied(false)
     }
   }
+
+  useEffect(() => {
+    if (!profile?.shop_id) {
+      setShopSlug(null)
+      return
+    }
+
+    let active = true
+    supabase
+      .from('shops')
+      .select('slug')
+      .eq('id', profile.shop_id)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (!active) return
+        if (error) {
+          console.error('Failed to load shop slug:', error.message)
+          setShopSlug(null)
+        } else {
+          setShopSlug((data?.slug as string | null) ?? null)
+        }
+      })
+
+    return () => { active = false }
+  }, [profile?.shop_id])
 
   useEffect(() => {
     if (showWelcome) {
