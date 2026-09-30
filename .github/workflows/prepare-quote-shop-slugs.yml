@@ -1,0 +1,99 @@
+name: Prepare branded quote URLs
+
+on:
+  push:
+    branches:
+      - feature/quote-shop-slugs
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply quote slug changes
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f'Expected snippet not found in {path}')
+              if text.count(old) != 1:
+                  raise SystemExit(f'Expected exactly one match in {path}, found {text.count(old)}')
+              p.write_text(text.replace(old, new, 1))
+
+          # Keep the existing UUID customizer route for compatibility, but allow
+          # the customizer to receive a resolved shop UUID from the new slug route.
+          replace_once(
+              'src/pages/CustomerCustomizer.tsx',
+              "export default function CustomerCustomizer() {\n  const { shopId } = useParams<{ shopId: string }>()",
+              "export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?: string } = {}) {\n  const { shopId: routeShopId } = useParams<{ shopId: string }>()\n  const shopId = shopIdOverride ?? routeShopId",
+          )
+
+          # Add a public one-segment shop URL route without removing any legacy routes.
+          replace_once(
+              'src/App.tsx',
+              "import CustomerCustomizer from './pages/CustomerCustomizer'\n",
+              "import CustomerCustomizer from './pages/CustomerCustomizer'\nimport PublicQuotePage from './pages/PublicQuotePage'\n",
+          )
+          replace_once(
+              'src/App.tsx',
+              "      <Route path=\"/build/:id\" element={<BuildSheet />} />\n",
+              "      <Route path=\"/build/:id\" element={<BuildSheet />} />\n      <Route path=\"/:shopSlug\" element={<PublicQuotePage />} />\n",
+          )
+
+          # Add slug to the Shop application type.
+          replace_once(
+              'src/lib/supabase.ts',
+              "export type Shop = {\n  id: string\n  name: string\n",
+              "export type Shop = {\n  id: string\n  name: string\n  slug: string\n",
+          )
+
+          # Make the dashboard generate the branded public hostname + readable slug.
+          replace_once(
+              'src/pages/ShopDashboard.tsx',
+              "const STATUS_FILTERS: { value: LeadStatus | 'all'; label: string }[] = [",
+              "const PUBLIC_QUOTE_ORIGIN = 'https://quotes.specplus.app'\n\nconst STATUS_FILTERS: { value: LeadStatus | 'all'; label: string }[] = [",
+          )
+          replace_once(
+              'src/pages/ShopDashboard.tsx',
+              "  const [copied, setCopied] = useState(false)\n\n  const customerLink = profile?.shop_id ? `${window.location.origin}/customize/${profile.shop_id}` : ''\n",
+              "  const [copied, setCopied] = useState(false)\n  const [shopSlug, setShopSlug] = useState<string | null>(null)\n\n  const customerLink = profile?.shop_id\n    ? shopSlug\n      ? `${PUBLIC_QUOTE_ORIGIN}/${shopSlug}`\n      : `${PUBLIC_QUOTE_ORIGIN}/customize/${profile.shop_id}`\n    : ''\n",
+          )
+          replace_once(
+              'src/pages/ShopDashboard.tsx',
+              "  useEffect(() => {\n    if (showWelcome) {",
+              "  useEffect(() => {\n    if (!profile?.shop_id) {\n      setShopSlug(null)\n      return\n    }\n\n    let active = true\n    supabase\n      .from('shops')\n      .select('slug')\n      .eq('id', profile.shop_id)\n      .maybeSingle()\n      .then(({ data, error }) => {\n        if (!active) return\n        if (error) {\n          console.error('Failed to load shop slug:', error.message)\n          setShopSlug(null)\n        } else {\n          setShopSlug((data?.slug as string | null) ?? null)\n        }\n      })\n\n    return () => { active = false }\n  }, [profile?.shop_id])\n\n  useEffect(() => {\n    if (showWelcome) {",
+          )
+
+          Path('src/pages/PublicQuotePage.tsx').write_text("""import { useEffect, useState } from 'react'\nimport { useParams } from 'react-router-dom'\nimport { AlertCircle } from 'lucide-react'\nimport { supabase } from '../lib/supabase'\nimport CustomerCustomizer from './CustomerCustomizer'\n\nexport default function PublicQuotePage() {\n  const { shopSlug } = useParams<{ shopSlug: string }>()\n  const [shopId, setShopId] = useState<string | null>(null)\n  const [loading, setLoading] = useState(true)\n\n  useEffect(() => {\n    if (!shopSlug) {\n      setShopId(null)\n      setLoading(false)\n      return\n    }\n\n    let active = true\n    setLoading(true)\n    supabase\n      .from('shops')\n      .select('id')\n      .eq('slug', shopSlug.toLowerCase())\n      .maybeSingle()\n      .then(({ data, error }) => {\n        if (!active) return\n        if (error) console.error('Failed to resolve shop slug:', error.message)\n        setShopId(data?.id ?? null)\n        setLoading(false)\n      })\n\n    return () => { active = false }\n  }, [shopSlug])\n\n  if (loading) {\n    return (\n      <div className=\"dark-surface min-h-screen flex items-center justify-center bg-obsidian-950 bg-radial-spotlight\">\n        <div className=\"w-9 h-9 border-[3px] border-white/15 border-t-cobalt-400 rounded-full animate-spin\" />\n      </div>\n    )\n  }\n\n  if (!shopId) {\n    return (\n      <div className=\"dark-surface min-h-screen flex items-center justify-center bg-obsidian-950 bg-radial-spotlight text-slate-100\">\n        <div className=\"text-center\">\n          <AlertCircle size={40} className=\"mx-auto text-red-400 mb-3\" />\n          <p className=\"text-lg font-medium\">Shop not found</p>\n        </div>\n      </div>\n    )\n  }\n\n  return <CustomerCustomizer shopIdOverride={shopId} />\n}\n""")
+
+          Path('supabase/migrations/20260930021500_add_shop_slugs.sql').write_text("""/*\n# Human-readable public quote URLs\n\nAdds a stable, unique slug to each shop so customer quote pages can use URLs like\nhttps://quotes.specplus.app/fastheadlights while preserving the existing UUID\n/customize/:shopId route for compatibility.\n*/\n\nBEGIN;\n\nALTER TABLE public.shops\nADD COLUMN IF NOT EXISTS slug text;\n\nCREATE OR REPLACE FUNCTION public.normalize_shop_slug(input text)\nRETURNS text\nLANGUAGE plpgsql\nIMMUTABLE\nSET search_path = public\nAS $$\nDECLARE\n  normalized text;\nBEGIN\n  normalized := trim(BOTH '-' FROM regexp_replace(lower(coalesce(input, '')), '[^a-z0-9]+', '-', 'g'));\n\n  IF normalized = '' THEN\n    normalized := 'shop';\n  END IF;\n\n  -- These names are application routes on the same Vercel project. Keep them\n  -- available by nudging an identically named shop to a safe public slug.\n  IF normalized = ANY (ARRAY['login', 'signup', 'admin', 'dashboard', 'customize', 'lead', 'embed', 'build']) THEN\n    normalized := normalized || '-shop';\n  END IF;\n\n  RETURN normalized;\nEND;\n$$;\n\n-- Backfill existing shops deterministically. The first shop using a base slug\n-- gets the clean name; later duplicates receive -2, -3, and so on.\nDO $$\nDECLARE\n  shop_record record;\n  base_slug text;\n  candidate text;\n  suffix integer;\nBEGIN\n  FOR shop_record IN\n    SELECT id, name\n    FROM public.shops\n    WHERE slug IS NULL OR btrim(slug) = ''\n    ORDER BY created_at, id\n  LOOP\n    base_slug := public.normalize_shop_slug(shop_record.name);\n    candidate := base_slug;\n    suffix := 2;\n\n    WHILE EXISTS (\n      SELECT 1\n      FROM public.shops\n      WHERE slug = candidate\n        AND id <> shop_record.id\n    ) LOOP\n      candidate := base_slug || '-' || suffix::text;\n      suffix := suffix + 1;\n    END LOOP;\n\n    UPDATE public.shops\n    SET slug = candidate\n    WHERE id = shop_record.id;\n  END LOOP;\nEND;\n$$;\n\nCREATE UNIQUE INDEX IF NOT EXISTS shops_slug_key\nON public.shops (slug);\n\nALTER TABLE public.shops\nALTER COLUMN slug SET NOT NULL;\n\nCREATE OR REPLACE FUNCTION public.set_new_shop_slug()\nRETURNS trigger\nLANGUAGE plpgsql\nSET search_path = public\nAS $$\nDECLARE\n  base_slug text;\n  candidate text;\n  suffix integer := 2;\nBEGIN\n  base_slug := public.normalize_shop_slug(coalesce(nullif(btrim(NEW.slug), ''), NEW.name));\n\n  -- Serialize creation of the same base slug so concurrent signups cannot both\n  -- choose the same value before the unique index sees either row.\n  PERFORM pg_advisory_xact_lock(hashtext(base_slug));\n\n  candidate := base_slug;\n  WHILE EXISTS (\n    SELECT 1\n    FROM public.shops\n    WHERE slug = candidate\n      AND id IS DISTINCT FROM NEW.id\n  ) LOOP\n    candidate := base_slug || '-' || suffix::text;\n    suffix := suffix + 1;\n  END LOOP;\n\n  NEW.slug := candidate;\n  RETURN NEW;\nEND;\n$$;\n\nDROP TRIGGER IF EXISTS shops_set_slug_before_insert ON public.shops;\nCREATE TRIGGER shops_set_slug_before_insert\nBEFORE INSERT ON public.shops\nFOR EACH ROW\nEXECUTE FUNCTION public.set_new_shop_slug();\n\n-- The public customizer already exposes safe storefront fields. Slug is now\n-- another safe lookup field and does not expose subscription/contact details.\nGRANT SELECT (slug) ON TABLE public.shops TO anon;\n\nCOMMENT ON COLUMN public.shops.slug IS\n  'Stable public URL slug used by quotes.specplus.app/<slug>';\n\nCOMMIT;\n""")
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Commit prepared changes
+        shell: bash
+        run: |
+          rm .github/workflows/prepare-quote-shop-slugs.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Add branded shop quote URLs"
+          git push
