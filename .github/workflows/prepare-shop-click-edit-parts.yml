@@ -22,95 +22,36 @@ jobs:
         run: |
           python <<'PY'
           from pathlib import Path
-
           path = Path('src/pages/VehicleBuilder.tsx')
           text = path.read_text()
-
-          old = '''  const handleSvgClick = (e: React.MouseEvent) => {
-    if (panMode || !isDrawing || drawTool !== 'polygon') return
-    const pt = getRelativeCoords(e)
-    setCurrentPoints((prev) => [...prev, pt])
-  }
-'''
-          new = '''  const pointerDownRef = useRef<{ x: number; y: number } | null>(null)
-  const canPickParts = !panMode && !isDrawing && !mergeMode && !editShapePartId
-
-  const handleSvgClick = (e: React.MouseEvent) => {
-    if (panMode) return
-    if (isDrawing) {
-      if (drawTool !== 'polygon') return
-      setCurrentPoints((prev) => [...prev, getRelativeCoords(e)])
-      return
-    }
-    if (!canPickParts || !svgRef.current) return
-    const down = pointerDownRef.current
-    if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return
-    const id = pickPartAtPoint(svgRef.current, e.clientX, e.clientY)
-    const part = id ? parts.find((p) => p.id === id) : null
-    if (part) handleEditPart(part)
-  }
-'''
-          if old not in text:
-            raise SystemExit('Could not find handleSvgClick block')
+          old = ("  const handleSvgClick = (e: React.MouseEvent) => {\n" "    if (panMode || !isDrawing || drawTool !== 'polygon') return\n" "    const pt = getRelativeCoords(e)\n" "    setCurrentPoints((prev) => [...prev, pt])\n" "  }\n")
+          new = ("  const pointerDownRef = useRef<{ x: number; y: number } | null>(null)\n" "  const canPickParts = !panMode && !isDrawing && !mergeMode && !editShapePartId\n\n" "  const handleSvgClick = (e: React.MouseEvent) => {\n" "    if (panMode) return\n" "    if (isDrawing) {\n" "      if (drawTool !== 'polygon') return\n" "      setCurrentPoints((prev) => [...prev, getRelativeCoords(e)])\n" "      return\n" "    }\n" "    if (!canPickParts || !svgRef.current) return\n" "    const down = pointerDownRef.current\n" "    if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return\n" "    const id = pickPartAtPoint(svgRef.current, e.clientX, e.clientY)\n" "    const part = id ? parts.find((p) => p.id === id) : null\n" "    if (part) handleEditPart(part)\n" "  }\n")
+          if old not in text: raise SystemExit('Could not find handleSvgClick block')
           text = text.replace(old, new, 1)
-
-          old = '''  const handleSvgMouseDown = (e: React.MouseEvent) => {
-    if (panMode || canFreePan()) {
-'''
-          new = '''  const handleSvgMouseDown = (e: React.MouseEvent) => {
-    pointerDownRef.current = { x: e.clientX, y: e.clientY }
-    if (panMode || canFreePan()) {
-'''
-          if old not in text:
-            raise SystemExit('Could not find handleSvgMouseDown block')
+          old = "  const handleSvgMouseDown = (e: React.MouseEvent) => {\n    if (panMode || canFreePan()) {\n"
+          new = "  const handleSvgMouseDown = (e: React.MouseEvent) => {\n    pointerDownRef.current = { x: e.clientX, y: e.clientY }\n    if (panMode || canFreePan()) {\n"
+          if old not in text: raise SystemExit('Could not find handleSvgMouseDown block')
           text = text.replace(old, new, 1)
-
-          old = '''                {partsForView.map((part) => {
-                  const isMergeSelected = mergeMode && mergeSelection.includes(part.id)
-                  const isEditing = editShapePartId === part.id
-                  const hc = getHighlightColor(part.highlight_color)
-                  return (
-                    <g key={part.id}>
-                      <path
-                        d={partShapeForView(part, activeView) ?? ''}
-                        fill={isEditing ? 'rgba(59, 130, 246, 0.2)' : isMergeSelected ? 'rgba(168, 85, 247, 0.3)' : hc.fill.replace('0.3', '0.15')}
-                        stroke={isEditing ? 'rgba(59, 130, 246, 0.9)' : isMergeSelected ? 'rgba(168, 85, 247, 0.9)' : hc.stroke.replace('0.9', '0.6')}
-                        strokeWidth="0.5"
-                        vectorEffect="non-scaling-stroke"
-                        className={mergeMode ? 'cursor-pointer hover:fill-purple-300/40' : 'hover:opacity-80'}
-                        onClick={mergeMode ? () => toggleMergeSelection(part.id) : undefined}
-                      />
-                    </g>
-                  )
-                })}
-'''
-          new = '''                {partsForView.map((part) => {
-                  const isMergeSelected = mergeMode && mergeSelection.includes(part.id)
-                  const isEditing = editShapePartId === part.id
-                  const isSelected = showPartForm && editingPartId === part.id
-                  const hc = getHighlightColor(part.highlight_color)
-                  return (
-                    <g key={part.id}>
-                      <path
-                        data-part-id={part.id}
-                        d={partShapeForView(part, activeView) ?? ''}
-                        fill={isEditing ? 'rgba(59, 130, 246, 0.2)' : isMergeSelected ? 'rgba(168, 85, 247, 0.3)' : isSelected ? hc.fill : hc.fill.replace('0.3', '0.15')}
-                        stroke={isEditing ? 'rgba(59, 130, 246, 0.9)' : isMergeSelected ? 'rgba(168, 85, 247, 0.9)' : isSelected ? hc.stroke : hc.stroke.replace('0.9', '0.6')}
-                        strokeWidth={isSelected ? '1.5' : '0.5'}
-                        vectorEffect="non-scaling-stroke"
-                        className={mergeMode ? 'cursor-pointer hover:fill-purple-300/40' : canPickParts ? 'cursor-pointer transition-opacity hover:opacity-70' : ''}
-                        onClick={mergeMode ? () => toggleMergeSelection(part.id) : undefined}
-                      >
-                        {canPickParts && <title>{part.name}</title>}
-                      </path>
-                    </g>
-                  )
-                })}
-'''
-          if old not in text:
-            raise SystemExit('Could not find vehicle overlay path block')
+          old = "                  const isEditing = editShapePartId === part.id\n                  const hc = getHighlightColor(part.highlight_color)\n"
+          new = "                  const isEditing = editShapePartId === part.id\n                  const isSelected = showPartForm && editingPartId === part.id\n                  const hc = getHighlightColor(part.highlight_color)\n"
+          if old not in text: raise SystemExit('Could not find selected-state insertion point')
           text = text.replace(old, new, 1)
-
+          old = "                      <path\n                        d={partShapeForView(part, activeView) ?? ''}\n"
+          new = "                      <path\n                        data-part-id={part.id}\n                        d={partShapeForView(part, activeView) ?? ''}\n"
+          if old not in text: raise SystemExit('Could not find traced path')
+          text = text.replace(old, new, 1)
+          old = "                        fill={isEditing ? 'rgba(59, 130, 246, 0.2)' : isMergeSelected ? 'rgba(168, 85, 247, 0.3)' : hc.fill.replace('0.3', '0.15')}\n"
+          new = "                        fill={isEditing ? 'rgba(59, 130, 246, 0.2)' : isMergeSelected ? 'rgba(168, 85, 247, 0.3)' : isSelected ? hc.fill : hc.fill.replace('0.3', '0.15')}\n"
+          if old not in text: raise SystemExit('Could not find traced fill')
+          text = text.replace(old, new, 1)
+          old = "                        stroke={isEditing ? 'rgba(59, 130, 246, 0.9)' : isMergeSelected ? 'rgba(168, 85, 247, 0.9)' : hc.stroke.replace('0.9', '0.6')}\n                        strokeWidth=\"0.5\"\n"
+          new = "                        stroke={isEditing ? 'rgba(59, 130, 246, 0.9)' : isMergeSelected ? 'rgba(168, 85, 247, 0.9)' : isSelected ? hc.stroke : hc.stroke.replace('0.9', '0.6')}\n                        strokeWidth={isSelected ? '1.5' : '0.5'}\n"
+          if old not in text: raise SystemExit('Could not find traced stroke')
+          text = text.replace(old, new, 1)
+          old = "                        className={mergeMode ? 'cursor-pointer hover:fill-purple-300/40' : 'hover:opacity-80'}\n                        onClick={mergeMode ? () => toggleMergeSelection(part.id) : undefined}\n                      />\n"
+          new = "                        className={mergeMode ? 'cursor-pointer hover:fill-purple-300/40' : canPickParts ? 'cursor-pointer transition-opacity hover:opacity-70' : ''}\n                        onClick={mergeMode ? () => toggleMergeSelection(part.id) : undefined}\n                      >\n                        {canPickParts && <title>{part.name}</title>}\n                      </path>\n"
+          if old not in text: raise SystemExit('Could not find traced path interaction block')
+          text = text.replace(old, new, 1)
           path.write_text(text)
           PY
 
