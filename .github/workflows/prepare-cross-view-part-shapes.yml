@@ -1,0 +1,335 @@
+name: Prepare cross-view part shapes
+
+on:
+  push:
+    branches:
+      - feature/cross-view-part-shapes
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/cross-view-part-shapes
+          fetch-depth: 0
+
+      - name: Apply focused cross-view changes
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected 1 match, found {count} for {old[:80]!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          def replace_n(path, old, new, expected):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(f"{path}: expected {expected} matches, found {count} for {old[:80]!r}")
+              p.write_text(text.replace(old, new))
+
+          # src/lib/supabase.ts
+          replace_once(
+              'src/lib/supabase.ts',
+              "  svg_path?: string | null\n  view?: 'front' | 'rear'\n",
+              "  svg_path?: string | null\n  alt_view_svg_path?: string | null\n  view?: 'front' | 'rear'\n",
+          )
+          replace_once(
+              'src/lib/supabase.ts',
+              "  external_url: string | null\n  created_at: string\n}\n\nexport const SHIP_SIZES",
+              "  external_url: string | null\n  alt_view_svg_path: string | null\n  created_at: string\n}\n\nexport function partShapeForView(\n  part: { view?: 'front' | 'rear'; svg_path?: string | null; alt_view_svg_path?: string | null },\n  view: 'front' | 'rear',\n): string | null {\n  if (part.view === view) return part.svg_path || null\n  return part.alt_view_svg_path || null\n}\n\nexport function shapedPartsOnView<\n  T extends { view?: 'front' | 'rear'; svg_path?: string | null; alt_view_svg_path?: string | null },\n>(parts: T[], view: 'front' | 'rear'): T[] {\n  return parts.flatMap((p) => {\n    const shape = partShapeForView(p, view)\n    return shape ? [{ ...p, svg_path: shape, view }] : []\n  })\n}\n\nexport const SHIP_SIZES",
+          )
+
+          # src/pages/VehicleBuilder.tsx
+          replace_once(
+              'src/pages/VehicleBuilder.tsx',
+              "DEFAULT_LEAD_TIME_MULTIPLIER } from '../lib/supabase'",
+              "DEFAULT_LEAD_TIME_MULTIPLIER, partShapeForView } from '../lib/supabase'",
+          )
+          replace_once(
+              'src/pages/VehicleBuilder.tsx',
+              "  const startEditShape = (part: VehiclePart) => {\n    setEditShapePartId(part.id)\n    setEditPoints(svgPathToPoints(part.svg_path))\n    setIsDrawing(false)\n    setMergeMode(false)\n    if (part.view !== activeView) setActiveView(part.view)\n  }",
+              "  const startEditShape = (part: VehiclePart) => {\n    const shapeHere = partShapeForView(part, activeView)\n    setEditShapePartId(part.id)\n    setEditPoints(svgPathToPoints(shapeHere ?? part.svg_path))\n    setIsDrawing(false)\n    setMergeMode(false)\n    if (!shapeHere) setActiveView(part.view)\n  }",
+          )
+          replace_once(
+              'src/pages/VehicleBuilder.tsx',
+              "  const saveEditedShape = async () => {\n    if (readOnly) return\n    if (!editShapePartId || editPoints.length < 3) return\n    const svgPath = pointsToSvgPath(editPoints)\n    const { error } = await supabase.from('vehicle_parts').update({ svg_path: svgPath }).eq('id', editShapePartId)\n    if (error) {\n      console.error('Failed to save shape:', error.message)\n    } else {\n      setParts((prev) => prev.map((p) => p.id === editShapePartId ? { ...p, svg_path: svgPath } : p))\n      setDraftParts((prev) => prev.map((p) => p.id === editShapePartId ? { ...p, svg_path: svgPath } : p))\n    }\n    cancelEditShape()\n  }",
+              "  const saveEditedShape = async () => {\n    if (readOnly) return\n    if (!editShapePartId || editPoints.length < 3) return\n    const svgPath = pointsToSvgPath(editPoints)\n    const editedPart = parts.find((p) => p.id === editShapePartId)\n    const onMainView = !editedPart || editedPart.view === activeView\n    const patch = onMainView ? { svg_path: svgPath } : { alt_view_svg_path: svgPath }\n    const { error } = await supabase.from('vehicle_parts').update(patch).eq('id', editShapePartId)\n    if (error) {\n      console.error('Failed to save shape:', error.message)\n    } else {\n      setParts((prev) => prev.map((p) => p.id === editShapePartId ? { ...p, ...patch } : p))\n      if (onMainView) setDraftParts((prev) => prev.map((p) => p.id === editShapePartId ? { ...p, svg_path: svgPath } : p))\n    }\n    cancelEditShape()\n  }",
+          )
+          replace_once(
+              'src/pages/VehicleBuilder.tsx',
+              "    if (part.view !== activeView) setActiveView(part.view)\n  }\n\n  const handleDeletePart",
+              "    if (!partShapeForView(part, activeView)) setActiveView(part.view)\n  }\n\n  const handleDeletePart",
+          )
+          replace_once(
+              'src/pages/VehicleBuilder.tsx',
+              "    const otherParts = parts.filter((p) => mergeSelection.includes(p.id) && p.id !== mergePrimaryChoice)\n    const otherIds = otherParts.map((p) => p.id)\n    const combinedSvgPath = [primaryPart.svg_path, ...otherParts.map((p) => p.svg_path)].join(' ')\n\n    const { data: updatedPrimary, error: updateError } = await supabase.from('vehicle_parts')\n      .update({ svg_path: combinedSvgPath })",
+              "    const otherParts = parts.filter((p) => mergeSelection.includes(p.id) && p.id !== mergePrimaryChoice)\n    const otherIds = otherParts.map((p) => p.id)\n    const mainView = primaryPart.view\n    const altView = mainView === 'front' ? 'rear' : 'front'\n    const joinShapes = (view: 'front' | 'rear') =>\n      [primaryPart, ...otherParts].map((p) => partShapeForView(p, view)).filter(Boolean).join(' ')\n    const combinedSvgPath = joinShapes(mainView)\n    const combinedAltPath = joinShapes(altView) || null\n\n    const { data: updatedPrimary, error: updateError } = await supabase.from('vehicle_parts')\n      .update({ svg_path: combinedSvgPath, alt_view_svg_path: combinedAltPath })",
+          )
+          replace_once(
+              'src/pages/VehicleBuilder.tsx',
+              ".filter((p) => p.view === activeView && !p.group_id)",
+              ".filter((p) => partShapeForView(p, activeView) && !p.group_id)",
+          )
+          replace_n(
+              'src/pages/VehicleBuilder.tsx',
+              "const partsForView = parts.filter((p) => p.view === activeView).sort((a, b) => a.sort_order - b.sort_order)",
+              "const partsForView = parts.filter((p) => partShapeForView(p, activeView)).sort((a, b) => a.sort_order - b.sort_order)",
+              2,
+          )
+          replace_once(
+              'src/pages/VehicleBuilder.tsx',
+              "setActiveView(v); setCurrentPoints([]); setIsDrawing(false); setMergeMode(false); setMergeSelection([]); setZoom(1);",
+              "setActiveView(v); setCurrentPoints([]); setIsDrawing(false); setZoom(1);",
+          )
+          replace_once(
+              'src/pages/VehicleBuilder.tsx',
+              "Select 2+ parts to merge ({mergeSelection.length} selected)",
+              "Select 2+ parts to merge, from either view ({mergeSelection.length} selected)",
+          )
+          replace_once(
+              'src/pages/VehicleBuilder.tsx',
+              "{partsForView.length >= 2 && (",
+              "{parts.length >= 2 && (",
+          )
+          replace_n(
+              'src/pages/VehicleBuilder.tsx',
+              "d={part.svg_path}",
+              "d={partShapeForView(part, activeView) ?? ''}",
+              2,
+          )
+
+          # src/pages/CustomerCustomizer.tsx
+          replace_once(
+              'src/pages/CustomerCustomizer.tsx',
+              "DEFAULT_LEAD_TIME_MULTIPLIER } from '../lib/supabase'",
+              "DEFAULT_LEAD_TIME_MULTIPLIER, shapedPartsOnView } from '../lib/supabase'",
+          )
+          replace_once(
+              'src/pages/CustomerCustomizer.tsx',
+              "    () => parts.filter((p) => p.view === activeView).sort((a, b) => a.sort_order - b.sort_order),",
+              "    () => shapedPartsOnView(parts, activeView).sort((a, b) => a.sort_order - b.sort_order),",
+          )
+
+          # src/pages/VehicleEmbed.tsx
+          replace_once(
+              'src/pages/VehicleEmbed.tsx',
+              "import { supabase, Vehicle, VehiclePart, formatCurrency, getHighlightColor } from '../lib/supabase'",
+              "import { supabase, Vehicle, VehiclePart, formatCurrency, getHighlightColor, shapedPartsOnView } from '../lib/supabase'",
+          )
+          replace_once(
+              'src/pages/VehicleEmbed.tsx',
+              "    () => parts.filter((p) => p.view === activeView).sort((a, b) => a.sort_order - b.sort_order),",
+              "    () => shapedPartsOnView(parts, activeView).sort((a, b) => a.sort_order - b.sort_order),",
+          )
+
+          # src/pages/LeadDetailPage.tsx
+          replace_once(
+              'src/pages/LeadDetailPage.tsx',
+              "const [partShapes, setPartShapes] = useState<Map<string, { svg_path: string | null; view: 'front' | 'rear' }>>(new Map())",
+              "const [partShapes, setPartShapes] = useState<Map<string, { svg_path: string | null; alt_view_svg_path: string | null; view: 'front' | 'rear' }>>(new Map())",
+          )
+          replace_n(
+              'src/pages/LeadDetailPage.tsx',
+              ".select('id, svg_path, view').eq('vehicle_id', lead.vehicle_id)",
+              ".select('id, svg_path, alt_view_svg_path, view').eq('vehicle_id', lead.vehicle_id)",
+              2,
+          )
+          replace_once(
+              'src/pages/LeadDetailPage.tsx',
+              "setPartShapes(new Map((vehicleParts ?? []).map((v) => [v.id, { svg_path: v.svg_path, view: v.view as 'front' | 'rear' }])))",
+              "setPartShapes(new Map((vehicleParts ?? []).map((v) => [v.id, { svg_path: v.svg_path, alt_view_svg_path: v.alt_view_svg_path, view: v.view as 'front' | 'rear' }])))",
+          )
+          replace_once(
+              'src/pages/LeadDetailPage.tsx',
+              "return shape?.svg_path ? { ...p, svg_path: shape.svg_path, view: shape.view } : p",
+              "return shape?.svg_path ? { ...p, svg_path: shape.svg_path, alt_view_svg_path: shape.alt_view_svg_path, view: shape.view } : p",
+          )
+          replace_once(
+              'src/pages/LeadDetailPage.tsx',
+              "return shape?.svg_path ? { ...p, svg_path: shape.svg_path, view: shape.view as 'front' | 'rear' } : p",
+              "return shape?.svg_path ? { ...p, svg_path: shape.svg_path, alt_view_svg_path: shape.alt_view_svg_path, view: shape.view as 'front' | 'rear' } : p",
+          )
+
+          # src/pages/BuildSheet.tsx -- preserve the existing safe optional chaining fix.
+          replace_once(
+              'src/pages/BuildSheet.tsx',
+              "import { supabase, BuildSheet as BuildSheetRecord, PartEntry, formatCurrency, getHighlightColor, svgPathAnchor } from '../lib/supabase'",
+              "import { supabase, BuildSheet as BuildSheetRecord, PartEntry, formatCurrency, getHighlightColor, svgPathAnchor, shapedPartsOnView } from '../lib/supabase'",
+          )
+          replace_once(
+              'src/pages/BuildSheet.tsx',
+              "const boxes = parts.filter((p) => (p.box && p.box.view === view) || (p.svg_path && p.view === view))",
+              "const boxes = [...parts.filter((p) => p.box?.view === view), ...shapedPartsOnView(parts.filter((p) => !p.box), view)]",
+          )
+          replace_once(
+              'src/pages/BuildSheet.tsx',
+              "<PhotoLabels boxes={parts.filter((p) => (p.box && p.box.view === enlarged.view) || (p.svg_path && p.view === enlarged.view))} />",
+              "<PhotoLabels boxes={[...parts.filter((p) => p.box?.view === enlarged.view), ...shapedPartsOnView(parts.filter((p) => !p.box), enlarged.view)]} />",
+          )
+
+          migration = r'''/*
+          # Cross-view part shapes
+
+          Adds a second optional SVG outline to vehicle parts so one logical part can
+          have a traced shape on both the front and rear vehicle views. Also updates
+          template cloning so both view shapes and external URLs survive a push to a shop.
+          */
+
+          BEGIN;
+
+          ALTER TABLE public.vehicle_parts
+          ADD COLUMN IF NOT EXISTS alt_view_svg_path text;
+
+          CREATE OR REPLACE FUNCTION public.clone_vehicle_template(
+            p_template_id uuid,
+            p_shop_ids uuid[]
+          )
+          RETURNS jsonb
+          LANGUAGE plpgsql
+          SECURITY DEFINER
+          SET search_path = public
+          AS $$
+          DECLARE
+            v_template       vehicles%ROWTYPE;
+            v_shop_id        uuid;
+            v_new_vehicle_id uuid;
+            v_new_group_id   uuid;
+            v_new_part_id    uuid;
+            v_group          RECORD;
+            v_part           RECORD;
+            v_group_map      jsonb;
+            v_created        jsonb := '[]'::jsonb;
+            v_skipped        jsonb := '[]'::jsonb;
+          BEGIN
+            IF get_current_role() <> 'admin' THEN
+              RAISE EXCEPTION 'Only admins can push vehicle templates';
+            END IF;
+
+            SELECT *
+            INTO v_template
+            FROM vehicles
+            WHERE id = p_template_id
+              AND is_template = true;
+
+            IF NOT FOUND THEN
+              RAISE EXCEPTION 'Template not found';
+            END IF;
+
+            FOREACH v_shop_id IN ARRAY p_shop_ids LOOP
+              IF EXISTS (
+                SELECT 1
+                FROM vehicles
+                WHERE shop_id = v_shop_id
+                  AND template_source_id = p_template_id
+              ) THEN
+                v_skipped := v_skipped || to_jsonb(v_shop_id);
+                CONTINUE;
+              END IF;
+
+              v_new_vehicle_id := gen_random_uuid();
+
+              INSERT INTO vehicles (
+                id, shop_id, name, year, make, model, status,
+                front_image_path, rear_image_path, is_template, template_source_id
+              )
+              VALUES (
+                v_new_vehicle_id, v_shop_id, v_template.name, v_template.year,
+                v_template.make, v_template.model, 'draft', v_template.front_image_path,
+                v_template.rear_image_path, false, p_template_id
+              );
+
+              v_group_map := '{}'::jsonb;
+
+              FOR v_group IN
+                SELECT * FROM part_groups WHERE vehicle_id = p_template_id
+              LOOP
+                v_new_group_id := gen_random_uuid();
+                INSERT INTO part_groups (id, vehicle_id, name, sort_order)
+                VALUES (v_new_group_id, v_new_vehicle_id, v_group.name, v_group.sort_order);
+                v_group_map := v_group_map || jsonb_build_object(v_group.id::text, v_new_group_id::text);
+              END LOOP;
+
+              FOR v_part IN
+                SELECT * FROM vehicle_parts WHERE vehicle_id = p_template_id
+              LOOP
+                v_new_part_id := gen_random_uuid();
+
+                INSERT INTO vehicle_parts (
+                  id, vehicle_id, name, view, svg_path, alt_view_svg_path,
+                  part_cost, paint_price, allow_send_parts, lead_time_days,
+                  sort_order, group_id, highlight_color, ship_size, external_url
+                )
+                VALUES (
+                  v_new_part_id, v_new_vehicle_id, v_part.name, v_part.view,
+                  v_part.svg_path, v_part.alt_view_svg_path, 0, 0,
+                  v_part.allow_send_parts, 7, v_part.sort_order,
+                  CASE
+                    WHEN v_part.group_id IS NULL THEN NULL
+                    ELSE (v_group_map ->> v_part.group_id::text)::uuid
+                  END,
+                  v_part.highlight_color, v_part.ship_size, v_part.external_url
+                );
+
+                INSERT INTO part_paint_styles (part_id, name, image_path, price, sort_order)
+                SELECT v_new_part_id, name, image_path, 0, sort_order
+                FROM part_paint_styles
+                WHERE part_id = v_part.id;
+
+                INSERT INTO part_options (part_id, name, description, price, sort_order)
+                SELECT v_new_part_id, name, description, 0, sort_order
+                FROM part_options
+                WHERE part_id = v_part.id;
+              END LOOP;
+
+              v_created := v_created || jsonb_build_object(
+                'shop_id', v_shop_id,
+                'vehicle_id', v_new_vehicle_id
+              );
+            END LOOP;
+
+            RETURN jsonb_build_object('created', v_created, 'skipped', v_skipped);
+          END;
+          $$;
+
+          REVOKE ALL ON FUNCTION public.clone_vehicle_template(uuid, uuid[]) FROM PUBLIC;
+          GRANT EXECUTE ON FUNCTION public.clone_vehicle_template(uuid, uuid[]) TO authenticated;
+
+          COMMIT;
+          '''
+          # Remove workflow indentation from the SQL heredoc.
+          migration = '\n'.join(line[10:] if line.startswith('          ') else line for line in migration.splitlines()) + '\n'
+          Path('supabase/migrations/20261001023000_add_cross_view_part_shapes.sql').write_text(migration)
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Keep generated files out of the change
+        run: |
+          git restore --worktree --staged dist tsconfig.tsbuildinfo 2>/dev/null || true
+
+      - name: Validate and commit
+        shell: bash
+        run: |
+          git config user.name "SpecPlus Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/lib/supabase.ts src/pages/VehicleBuilder.tsx src/pages/CustomerCustomizer.tsx src/pages/VehicleEmbed.tsx src/pages/LeadDetailPage.tsx src/pages/BuildSheet.tsx supabase/migrations/20261001023000_add_cross_view_part_shapes.sql
+          git rm .github/workflows/prepare-cross-view-part-shapes.yml
+          git diff --cached --check
+          git commit -m "Add cross-view part shapes"
+          git push origin HEAD:feature/cross-view-part-shapes
