@@ -119,6 +119,7 @@ export type PartEntry = {
   reference_image_path?: string | null
   box?: CustomPartBox | null
   svg_path?: string | null
+  alt_view_svg_path?: string | null
   view?: 'front' | 'rear'
   part_cost?: number | null
   paint_price?: number | null
@@ -180,7 +181,25 @@ export type VehiclePart = {
   highlight_color: string
   ship_size: ShipSize
   external_url: string | null
+  alt_view_svg_path: string | null
   created_at: string
+}
+
+export function partShapeForView(
+  part: { view?: 'front' | 'rear'; svg_path?: string | null; alt_view_svg_path?: string | null },
+  view: 'front' | 'rear',
+): string | null {
+  if (part.view === view) return part.svg_path || null
+  return part.alt_view_svg_path || null
+}
+
+export function shapedPartsOnView<
+  T extends { view?: 'front' | 'rear'; svg_path?: string | null; alt_view_svg_path?: string | null },
+>(parts: T[], view: 'front' | 'rear'): T[] {
+  return parts.flatMap((p) => {
+    const shape = partShapeForView(p, view)
+    return shape ? [{ ...p, svg_path: shape, view }] : []
+  })
 }
 
 export const SHIP_SIZES: { value: ShipSize; label: string }[] = [

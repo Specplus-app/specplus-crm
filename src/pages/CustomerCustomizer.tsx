@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { supabase, Vehicle, VehiclePart, PartGroup, PartPaintStyle, PartOption, Shop, formatCurrency, getHighlightColor, ShipSize, shipSizeRank, estimateLeadTimeDays, DEFAULT_LEAD_TIME_MULTIPLIER } from '../lib/supabase'
+import { supabase, Vehicle, VehiclePart, PartGroup, PartPaintStyle, PartOption, Shop, formatCurrency, getHighlightColor, ShipSize, shipSizeRank, estimateLeadTimeDays, DEFAULT_LEAD_TIME_MULTIPLIER, shapedPartsOnView } from '../lib/supabase'
 import { pickPartAtPoint } from '../lib/svgHit'
 import CustomBuildFlow from '../components/CustomBuildFlow'
 import { Shield, Car, ArrowLeft, ArrowRight, Check, Mail, Phone, User, MapPin, Send, CheckCircle2, AlertCircle, Layers, X, Palette, Plus, Clock, Calendar, PencilRuler, Hash, Minus, Hand, RotateCcw } from 'lucide-react'
@@ -184,7 +184,7 @@ export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?
   const currentImageUrl = activeView === 'front' ? frontUrl : rearUrl
 
   const partsForView = useMemo(
-    () => parts.filter((p) => p.view === activeView).sort((a, b) => a.sort_order - b.sort_order),
+    () => shapedPartsOnView(parts, activeView).sort((a, b) => a.sort_order - b.sort_order),
     [parts, activeView]
   )
 

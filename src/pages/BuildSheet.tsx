@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
-import { supabase, BuildSheet as BuildSheetRecord, PartEntry, formatCurrency, getHighlightColor, svgPathAnchor } from '../lib/supabase'
+import { supabase, BuildSheet as BuildSheetRecord, PartEntry, formatCurrency, getHighlightColor, svgPathAnchor, shapedPartsOnView } from '../lib/supabase'
 import { AlertCircle, Layers, Clock, Package, Palette, X } from 'lucide-react'
 
 type EnlargedPhoto = { url: string; label: string; view: 'front' | 'rear' } | null
@@ -220,7 +220,7 @@ export default function BuildSheet() {
         {photos.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
             {photos.map(([label, view, url]) => {
-              const boxes = parts.filter((p) => (p.box && p.box.view === view) || (p.svg_path && p.view === view))
+              const boxes = [...parts.filter((p) => p.box?.view === view), ...shapedPartsOnView(parts.filter((p) => !p.box), view)]
               return (
                 <button
                   key={label}
@@ -311,7 +311,7 @@ export default function BuildSheet() {
             </div>
             <div className="relative rounded-xl overflow-hidden select-none bg-black">
               <img src={enlarged.url} alt={enlarged.label} className="w-full h-auto block" />
-              <PhotoLabels boxes={parts.filter((p) => (p.box && p.box.view === enlarged.view) || (p.svg_path && p.view === enlarged.view))} />
+              <PhotoLabels boxes={[...parts.filter((p) => p.box?.view === enlarged.view), ...shapedPartsOnView(parts.filter((p) => !p.box), enlarged.view)]} />
             </div>
           </div>
         </div>

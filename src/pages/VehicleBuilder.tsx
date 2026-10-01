@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { useShopBilling } from '../lib/billing'
-import { supabase, Vehicle, Shop, VehiclePart, PartGroup, PartPaintStyle, PartOption, formatCurrency, HIGHLIGHT_COLORS, getHighlightColor, ShipSize, SHIP_SIZES, shipSizeRank, estimateLeadTimeDays, DEFAULT_LEAD_TIME_MULTIPLIER } from '../lib/supabase'
+import { supabase, Vehicle, Shop, VehiclePart, PartGroup, PartPaintStyle, PartOption, formatCurrency, HIGHLIGHT_COLORS, getHighlightColor, ShipSize, SHIP_SIZES, shipSizeRank, estimateLeadTimeDays, DEFAULT_LEAD_TIME_MULTIPLIER, partShapeForView } from '../lib/supabase'
 import { pickPartAtPoint } from '../lib/svgHit'
 import { ArrowLeft, Upload, Plus, Trash2, Save, Eye, EyeOff, Car, X, Image as ImageIcon, GitMerge, ChevronRight, Play, Check, Layers, ZoomIn, ZoomOut, Maximize2, MousePointer2, Square, Hand, Undo2, PenTool, Palette, ChevronUp, ChevronDown, Clock } from 'lucide-react'
 
@@ -279,11 +279,12 @@ export default function VehicleBuilder() {
   }
 
   const startEditShape = (part: VehiclePart) => {
+    const shapeHere = partShapeForView(part, activeView)
     setEditShapePartId(part.id)
-    setEditPoints(svgPathToPoints(part.svg_path))
+    setEditPoints(svgPathToPoints(shapeHere ?? part.svg_path))
     setIsDrawing(false)
     setMergeMode(false)
-    if (part.view !== activeView) setActiveView(part.view)
+    if (!shapeHere) setActiveView(part.view)
   }
 
   const cancelEditShape = () => {
@@ -296,12 +297,15 @@ export default function VehicleBuilder() {
     if (readOnly) return
     if (!editShapePartId || editPoints.length < 3) return
     const svgPath = pointsToSvgPath(editPoints)
-    const { error } = await supabase.from('vehicle_parts').update({ svg_path: svgPath }).eq('id', editShapePartId)
+    const editedPart = parts.find((p) => p.id === editShapePartId)
+    const onMainView = !editedPart || editedPart.view === activeView
+    const patch = onMainView ? { svg_path: svgPath } : { alt_view_svg_path: svgPath }
+    const { error } = await supabase.from('vehicle_parts').update(patch).eq('id', editShapePartId)
     if (error) {
       console.error('Failed to save shape:', error.message)
     } else {
-      setParts((prev) => prev.map((p) => p.id === editShapePartId ? { ...p, svg_path: svgPath } : p))
-      setDraftParts((prev) => prev.map((p) => p.id === editShapePartId ? { ...p, svg_path: svgPath } : p))
+      setParts((prev) => prev.map((p) => p.id === editShapePartId ? { ...p, ...patch } : p))
+      if (onMainView) setDraftParts((prev) => prev.map((p) => p.id === editShapePartId ? { ...p, svg_path: svgPath } : p))
     }
     cancelEditShape()
   }
@@ -457,7 +461,7 @@ export default function VehicleBuilder() {
     setPaintStyles((stylesRes.data as PartPaintStyle[]) ?? [])
     setPartOptions((optionsRes.data as PartOption[]) ?? [])
     setShowPartForm(true)
-    if (part.view !== activeView) setActiveView(part.view)
+    if (!partShapeForView(part, activeView)) setActiveView(part.view)
   }
 
   const handleDeletePart = async (partId: string) => {
@@ -547,10 +551,15 @@ export default function VehicleBuilder() {
 
     const otherParts = parts.filter((p) => mergeSelection.includes(p.id) && p.id !== mergePrimaryChoice)
     const otherIds = otherParts.map((p) => p.id)
-    const combinedSvgPath = [primaryPart.svg_path, ...otherParts.map((p) => p.svg_path)].join(' ')
+    const mainView = primaryPart.view
+    const altView = mainView === 'front' ? 'rear' : 'front'
+    const joinShapes = (view: 'front' | 'rear') =>
+      [primaryPart, ...otherParts].map((p) => partShapeForView(p, view)).filter(Boolean).join(' ')
+    const combinedSvgPath = joinShapes(mainView)
+    const combinedAltPath = joinShapes(altView) || null
 
     const { data: updatedPrimary, error: updateError } = await supabase.from('vehicle_parts')
-      .update({ svg_path: combinedSvgPath })
+      .update({ svg_path: combinedSvgPath, alt_view_svg_path: combinedAltPath })
       .eq('id', primaryPart.id)
       .select('*')
       .single()
@@ -587,7 +596,7 @@ export default function VehicleBuilder() {
   const handleReorderPart = async (partId: string, direction: 'up' | 'down') => {
     if (readOnly) return
     const list = parts
-      .filter((p) => p.view === activeView && !p.group_id)
+      .filter((p) => partShapeForView(p, activeView) && !p.group_id)
       .sort((a, b) => a.sort_order - b.sort_order)
     const idx = list.findIndex((p) => p.id === partId)
     if (idx === -1) return
@@ -607,7 +616,7 @@ export default function VehicleBuilder() {
   }
 
   // ── Derived data ─────────────────────────────────────────────────────────
-  const partsForView = parts.filter((p) => p.view === activeView).sort((a, b) => a.sort_order - b.sort_order)
+  const partsForView = parts.filter((p) => partShapeForView(p, activeView)).sort((a, b) => a.sort_order - b.sort_order)
   const ungroupedParts = partsForView.filter((p) => !p.group_id)
   const groupsForView = groups.filter((g) => partsForView.some((p) => p.group_id === g.id))
 
@@ -686,7 +695,7 @@ export default function VehicleBuilder() {
           {(['front', 'rear'] as const).map((v) => (
             <button
               key={v}
-              onClick={() => { setActiveView(v); setCurrentPoints([]); setIsDrawing(false); setMergeMode(false); setMergeSelection([]); setZoom(1); setEditShapePartId(null); setEditPoints([]); setPanMode(false); setRectStart(null); setRectCurrent(null) }}
+              onClick={() => { setActiveView(v); setCurrentPoints([]); setIsDrawing(false); setZoom(1); setEditShapePartId(null); setEditPoints([]); setPanMode(false); setRectStart(null); setRectCurrent(null) }}
               className={`px-4 py-2 rounded-lg text-sm font-medium capitalize transition-colors ${
                 activeView === v
                   ? 'bg-zinc-900 text-white'
@@ -710,7 +719,7 @@ export default function VehicleBuilder() {
             {mergeMode ? (
               <>
                 <span className="text-sm text-zinc-500">
-                  Select 2+ parts to merge ({mergeSelection.length} selected)
+                  Select 2+ parts to merge, from either view ({mergeSelection.length} selected)
                 </span>
                 <button onClick={cancelMergeMode} className="text-sm text-zinc-600 bg-zinc-100 hover:bg-zinc-200 rounded-lg px-3 py-1.5 transition-colors">
                   Cancel
@@ -794,7 +803,7 @@ export default function VehicleBuilder() {
               </>
             ) : (
               <>
-                {partsForView.length >= 2 && (
+                {parts.length >= 2 && (
                   <button
                     onClick={startMergeMode}
                     className="flex items-center gap-1.5 text-sm font-medium text-zinc-700 bg-white border border-zinc-200 hover:border-zinc-300 rounded-lg px-3 py-2 transition-colors"
@@ -856,7 +865,7 @@ export default function VehicleBuilder() {
                   return (
                     <g key={part.id}>
                       <path
-                        d={part.svg_path}
+                        d={partShapeForView(part, activeView) ?? ''}
                         fill={isEditing ? 'rgba(59, 130, 246, 0.2)' : isMergeSelected ? 'rgba(168, 85, 247, 0.3)' : hc.fill.replace('0.3', '0.15')}
                         stroke={isEditing ? 'rgba(59, 130, 246, 0.9)' : isMergeSelected ? 'rgba(168, 85, 247, 0.9)' : hc.stroke.replace('0.9', '0.6')}
                         strokeWidth="0.5"
@@ -1638,7 +1647,7 @@ function PreviewModal({
     })
   }, [shopId])
 
-  const partsForView = parts.filter((p) => p.view === activeView).sort((a, b) => a.sort_order - b.sort_order)
+  const partsForView = parts.filter((p) => partShapeForView(p, activeView)).sort((a, b) => a.sort_order - b.sort_order)
   const currentImageUrl = activeView === 'front' ? frontUrl : rearUrl
 
   const groupName = (groupId: string | null) => groupId ? groups.find((g) => g.id === groupId)?.name ?? null : null
@@ -1788,7 +1797,7 @@ function PreviewModal({
                   <path
                     key={part.id}
                     data-part-id={part.id}
-                    d={part.svg_path}
+                    d={partShapeForView(part, activeView) ?? ''}
                     fill={selected ? color.fill : hovered ? 'rgba(59, 130, 246, 0.2)' : 'transparent'}
                     stroke={selected ? color.stroke : hovered ? 'rgb(96, 165, 250)' : 'transparent'}
                     strokeWidth="0.4"
