@@ -189,10 +189,22 @@ export default function VehicleBuilder() {
     }
   }
 
+  const pointerDownRef = useRef<{ x: number; y: number } | null>(null)
+  const canPickParts = !panMode && !isDrawing && !mergeMode && !editShapePartId
+
   const handleSvgClick = (e: React.MouseEvent) => {
-    if (panMode || !isDrawing || drawTool !== 'polygon') return
-    const pt = getRelativeCoords(e)
-    setCurrentPoints((prev) => [...prev, pt])
+    if (panMode) return
+    if (isDrawing) {
+      if (drawTool !== 'polygon') return
+      setCurrentPoints((prev) => [...prev, getRelativeCoords(e)])
+      return
+    }
+    if (!canPickParts || !svgRef.current) return
+    const down = pointerDownRef.current
+    if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return
+    const id = pickPartAtPoint(svgRef.current, e.clientX, e.clientY)
+    const part = id ? parts.find((p) => p.id === id) : null
+    if (part) handleEditPart(part)
   }
 
   const pointsToSvgPath = (pts: Point[]): string => {
@@ -217,6 +229,7 @@ export default function VehicleBuilder() {
   ]
 
   const handleSvgMouseDown = (e: React.MouseEvent) => {
+    pointerDownRef.current = { x: e.clientX, y: e.clientY }
     if (panMode || canFreePan()) {
       if (!scrollRef.current) return
       e.preventDefault()
@@ -861,18 +874,22 @@ export default function VehicleBuilder() {
                 {partsForView.map((part) => {
                   const isMergeSelected = mergeMode && mergeSelection.includes(part.id)
                   const isEditing = editShapePartId === part.id
+                  const isSelected = showPartForm && editingPartId === part.id
                   const hc = getHighlightColor(part.highlight_color)
                   return (
                     <g key={part.id}>
                       <path
+                        data-part-id={part.id}
                         d={partShapeForView(part, activeView) ?? ''}
-                        fill={isEditing ? 'rgba(59, 130, 246, 0.2)' : isMergeSelected ? 'rgba(168, 85, 247, 0.3)' : hc.fill.replace('0.3', '0.15')}
-                        stroke={isEditing ? 'rgba(59, 130, 246, 0.9)' : isMergeSelected ? 'rgba(168, 85, 247, 0.9)' : hc.stroke.replace('0.9', '0.6')}
-                        strokeWidth="0.5"
+                        fill={isEditing ? 'rgba(59, 130, 246, 0.2)' : isMergeSelected ? 'rgba(168, 85, 247, 0.3)' : isSelected ? hc.fill : hc.fill.replace('0.3', '0.15')}
+                        stroke={isEditing ? 'rgba(59, 130, 246, 0.9)' : isMergeSelected ? 'rgba(168, 85, 247, 0.9)' : isSelected ? hc.stroke : hc.stroke.replace('0.9', '0.6')}
+                        strokeWidth={isSelected ? '1.5' : '0.5'}
                         vectorEffect="non-scaling-stroke"
-                        className={mergeMode ? 'cursor-pointer hover:fill-purple-300/40' : 'hover:opacity-80'}
+                        className={mergeMode ? 'cursor-pointer hover:fill-purple-300/40' : canPickParts ? 'cursor-pointer transition-opacity hover:opacity-70' : ''}
                         onClick={mergeMode ? () => toggleMergeSelection(part.id) : undefined}
-                      />
+                      >
+                        {canPickParts && <title>{part.name}</title>}
+                      </path>
                     </g>
                   )
                 })}
