@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useParams } from 'react-router-dom'
-import { supabase, Vehicle, VehiclePart, formatCurrency, getHighlightColor } from '../lib/supabase'
+import { supabase, Vehicle, VehiclePart, formatCurrency, getHighlightColor, shapedPartsOnView } from '../lib/supabase'
 import { pickPartAtPoint } from '../lib/svgHit'
 import { Car, AlertCircle, Plus, Minus, Hand, RotateCcw, ExternalLink } from 'lucide-react'
 
@@ -102,7 +102,7 @@ export default function VehicleEmbed() {
   const currentImageUrl = activeView === 'front' ? frontUrl : rearUrl
 
   const partsForView = useMemo(
-    () => parts.filter((p) => p.view === activeView).sort((a, b) => a.sort_order - b.sort_order),
+    () => shapedPartsOnView(parts, activeView).sort((a, b) => a.sort_order - b.sort_order),
     [parts, activeView]
   )
 

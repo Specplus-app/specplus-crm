@@ -126,7 +126,7 @@ export default function LeadDetailPage() {
   const [sendingEmail, setSendingEmail] = useState(false)
   const [emailStatus, setEmailStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const [templateImages, setTemplateImages] = useState<{ front: string | null; rear: string | null }>({ front: null, rear: null })
-  const [partShapes, setPartShapes] = useState<Map<string, { svg_path: string | null; view: 'front' | 'rear' }>>(new Map())
+  const [partShapes, setPartShapes] = useState<Map<string, { svg_path: string | null; alt_view_svg_path: string | null; view: 'front' | 'rear' }>>(new Map())
 
   const loadLead = useCallback(async () => {
     if (!leadId) return
@@ -191,14 +191,14 @@ export default function LeadDetailPage() {
     ;(async () => {
       const [{ data: vehicle }, { data: vehicleParts }] = await Promise.all([
         supabase.from('vehicles').select('front_image_path, rear_image_path').eq('id', lead.vehicle_id).maybeSingle(),
-        supabase.from('vehicle_parts').select('id, svg_path, view').eq('vehicle_id', lead.vehicle_id),
+        supabase.from('vehicle_parts').select('id, svg_path, alt_view_svg_path, view').eq('vehicle_id', lead.vehicle_id),
       ])
       if (!active) return
       setTemplateImages({
         front: vehicleImageUrl(vehicle?.front_image_path ?? null),
         rear: vehicleImageUrl(vehicle?.rear_image_path ?? null),
       })
-      setPartShapes(new Map((vehicleParts ?? []).map((v) => [v.id, { svg_path: v.svg_path, view: v.view as 'front' | 'rear' }])))
+      setPartShapes(new Map((vehicleParts ?? []).map((v) => [v.id, { svg_path: v.svg_path, alt_view_svg_path: v.alt_view_svg_path, view: v.view as 'front' | 'rear' }])))
     })()
     return () => { active = false }
   }, [lead])
@@ -299,7 +299,7 @@ export default function LeadDetailPage() {
   const enrichedParts: PartEntry[] = parts.map((p) => {
     if (p.box) return p
     const shape = partShapes.get(p.id)
-    return shape?.svg_path ? { ...p, svg_path: shape.svg_path, view: shape.view } : p
+    return shape?.svg_path ? { ...p, svg_path: shape.svg_path, alt_view_svg_path: shape.alt_view_svg_path, view: shape.view } : p
   })
   const hasTemplatePhotos = !lead.is_custom && (templateImages.front || templateImages.rear)
 
@@ -317,7 +317,7 @@ export default function LeadDetailPage() {
     if (!frontUrl && !rearUrl && lead.vehicle_id) {
       const [{ data: vehicle }, { data: vehicleParts }] = await Promise.all([
         supabase.from('vehicles').select('front_image_path, rear_image_path').eq('id', lead.vehicle_id).maybeSingle(),
-        supabase.from('vehicle_parts').select('id, svg_path, view').eq('vehicle_id', lead.vehicle_id),
+        supabase.from('vehicle_parts').select('id, svg_path, alt_view_svg_path, view').eq('vehicle_id', lead.vehicle_id),
       ])
       frontUrl = vehicleImageUrl(vehicle?.front_image_path ?? null)
       rearUrl = vehicleImageUrl(vehicle?.rear_image_path ?? null)
@@ -327,7 +327,7 @@ export default function LeadDetailPage() {
       sheetParts = parts.map((p) => {
         if (p.box) return p
         const shape = shapeById.get(p.id)
-        return shape?.svg_path ? { ...p, svg_path: shape.svg_path, view: shape.view as 'front' | 'rear' } : p
+        return shape?.svg_path ? { ...p, svg_path: shape.svg_path, alt_view_svg_path: shape.alt_view_svg_path, view: shape.view as 'front' | 'rear' } : p
       })
     }
 
