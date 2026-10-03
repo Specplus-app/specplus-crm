@@ -56,6 +56,7 @@ export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?
   const [partOptions, setPartOptions] = useState<PartOption[]>([])
   const [detailPart, setDetailPart] = useState<VehiclePart | null>(null)
   const [hoveredPartId, setHoveredPartId] = useState<string | null>(null)
+  const [showAvailable, setShowAvailable] = useState(false)
   const svgRef = useRef<SVGSVGElement>(null)
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
@@ -557,10 +558,11 @@ export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?
             </button>
 
             <h2 className="text-xl font-bold mb-1 text-white">{selectedVehicle.name}</h2>
-            <p className="text-sm text-slate-400 mb-4">Tap a part to add it to your build. Pinch or use the zoom buttons to get in close, then drag to move around.</p>
+            <p className="text-sm text-slate-400 mb-4">Tap a part to add it to your build. Turn on "Show clickable areas" to see every part you can choose. Pinch or use the zoom buttons to get in close, then drag to move around.</p>
 
+            <div className="flex flex-wrap items-center gap-3 mb-4">
             {/* View toggle */}
-            <div className="inline-flex bg-obsidian-900/80 p-1.5 rounded-xl border border-white/10 shadow-inner gap-1 mb-4">
+            <div className="inline-flex bg-obsidian-900/80 p-1.5 rounded-xl border border-white/10 shadow-inner gap-1">
               {(['front', 'rear'] as const).map((v) => {
                 const hasImage = v === 'front' ? !!frontUrl : !!rearUrl
                 if (!hasImage) return null
@@ -576,6 +578,29 @@ export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?
                   </button>
                 )
               })}
+            </div>
+
+            {/* Clickable-areas toggle */}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={showAvailable}
+              onClick={() => setShowAvailable((v) => !v)}
+              className="inline-flex items-center gap-2.5 bg-obsidian-900/80 px-3 py-2.5 rounded-xl border border-white/10 shadow-inner text-xs font-medium tracking-wide text-slate-300 hover:text-slate-100 transition-colors"
+            >
+              <span
+                className={`relative inline-flex w-8 h-[18px] flex-shrink-0 rounded-full transition-colors ${
+                  showAvailable ? 'bg-cobalt-600 shadow-glow-blue' : 'bg-white/15'
+                }`}
+              >
+                <span
+                  className={`absolute top-[3px] left-[3px] w-3 h-3 rounded-full bg-white shadow transition-transform ${
+                    showAvailable ? 'translate-x-[14px]' : 'translate-x-0'
+                  }`}
+                />
+              </span>
+              Show clickable areas
+            </button>
             </div>
 
             {/* Vehicle image with SVG overlay */}
@@ -621,14 +646,29 @@ export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?
                     const selected = selectedParts.get(part.id)
                     const hovered = hoveredPartId === part.id
                     const color = getHighlightColor(part.highlight_color)
+                    // Priority: selected > hovered > available (toggle on) > transparent.
+                    const available = showAvailable && !selected && !hovered
                     return (
                       <g key={part.id}>
+                        {available && (
+                          // Dark underlay so the dashed white outline reads on light and dark paint.
+                          // No data-part-id and no pointer events, so hit-testing is unchanged.
+                          <path
+                            d={part.svg_path}
+                            fill="none"
+                            stroke="rgba(15, 23, 42, 0.45)"
+                            strokeWidth="1"
+                            vectorEffect="non-scaling-stroke"
+                            pointerEvents="none"
+                          />
+                        )}
                         <path
                           data-part-id={part.id}
                           d={part.svg_path}
-                          fill={selected ? color.fill : hovered ? 'rgba(59, 130, 246, 0.2)' : 'transparent'}
-                          stroke={selected ? color.stroke : hovered ? 'rgb(96, 165, 250)' : 'transparent'}
-                          strokeWidth="0.4"
+                          fill={selected ? color.fill : hovered ? 'rgba(59, 130, 246, 0.2)' : available ? 'rgba(255, 255, 255, 0.14)' : 'transparent'}
+                          stroke={selected ? color.stroke : hovered ? 'rgb(96, 165, 250)' : available ? 'rgba(255, 255, 255, 0.9)' : 'transparent'}
+                          strokeWidth={available ? '1' : '0.4'}
+                          strokeDasharray={available ? '3 2' : undefined}
                           vectorEffect="non-scaling-stroke"
                           className="cursor-pointer transition-colors"
                         />
@@ -693,14 +733,18 @@ export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?
             )}
 
             {/* Legend */}
-            <div className="flex items-center gap-4 mb-4 text-xs text-slate-500">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-4 text-xs text-slate-500">
               <span className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded bg-blue-500/30 border border-blue-500/60"></span>
-                Available
+                <span className="w-3 h-3 rounded bg-white/15 border border-dashed border-white/80"></span>
+                Clickable area (when "Show clickable areas" is on)
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-3 h-3 rounded bg-blue-500/20 border border-blue-400"></span>
+                Hovered
               </span>
               <span className="flex items-center gap-1.5">
                 <span className="w-3 h-3 rounded bg-emerald-500/30 border border-emerald-500/90"></span>
-                Selected
+                Selected (solid color)
               </span>
             </div>
 
@@ -864,7 +908,7 @@ export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?
             {/* Available parts hint */}
             {partsForView.length > 0 && selectedList.length === 0 && (
               <p className="text-sm text-slate-500 text-center">
-                {partsForView.length} parts available on this view — click the highlighted areas on the image to add them.
+                {partsForView.length} parts available on this view — {showAvailable ? 'click any outlined area' : 'turn on "Show clickable areas" to see them, then click one'} on the image to add it.
               </p>
             )}
           </>
