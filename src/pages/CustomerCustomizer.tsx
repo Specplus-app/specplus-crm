@@ -651,7 +651,7 @@ export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?
                     return (
                       <g key={part.id}>
                         {available && (
-                          // Dark underlay so the dashed white outline reads on light and dark paint.
+                          // Dark underlay so the dashed lime outline reads on light and dark paint.
                           // No data-part-id and no pointer events, so hit-testing is unchanged.
                           <path
                             d={part.svg_path}
@@ -665,8 +665,8 @@ export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?
                         <path
                           data-part-id={part.id}
                           d={part.svg_path}
-                          fill={selected ? color.fill : hovered ? 'rgba(59, 130, 246, 0.2)' : available ? 'rgba(255, 255, 255, 0.14)' : 'transparent'}
-                          stroke={selected ? color.stroke : hovered ? 'rgb(96, 165, 250)' : available ? 'rgba(255, 255, 255, 0.9)' : 'transparent'}
+                          fill={selected ? color.fill : hovered ? 'rgba(59, 130, 246, 0.2)' : available ? 'rgba(163, 230, 53, 0.30)' : 'transparent'}
+                          stroke={selected ? color.stroke : hovered ? 'rgb(96, 165, 250)' : available ? 'rgb(163, 230, 53)' : 'transparent'}
                           strokeWidth={available ? '1' : '0.4'}
                           strokeDasharray={available ? '3 2' : undefined}
                           vectorEffect="non-scaling-stroke"
@@ -735,7 +735,7 @@ export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?
             {/* Legend */}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-4 text-xs text-slate-500">
               <span className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded bg-white/15 border border-dashed border-white/80"></span>
+                <span className="w-3 h-3 rounded bg-lime-400/30 border border-dashed border-lime-400"></span>
                 Clickable area (when "Show clickable areas" is on)
               </span>
               <span className="flex items-center gap-1.5">
