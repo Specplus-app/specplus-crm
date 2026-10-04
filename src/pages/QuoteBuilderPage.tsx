@@ -7,6 +7,7 @@ import {
   isQuoteExpired, lineItemTotal, newLineItem, normalizeQuote, customerQuoteUrl, staffPreviewUrl,
 } from '../lib/quotes'
 import QuoteVehiclePhotos from '../components/QuoteVehiclePhotos'
+import QuoteBuildItemEditor from '../components/QuoteBuildItemEditor'
 import {
   AlertCircle, ArrowLeft, Check, Copy, ExternalLink, FileText, Loader2, Lock, Plus, RefreshCw, Save, Send, Trash2,
 } from 'lucide-react'
@@ -52,6 +53,7 @@ export default function QuoteBuilderPage() {
   const [busy, setBusy] = useState<'create' | 'save' | 'send' | 'revise' | null>(null)
   const [message, setMessage] = useState<Message>(null)
   const [copied, setCopied] = useState(false)
+  const [addingItem, setAddingItem] = useState(false)
 
   const loadAll = useCallback(async (selectId?: string) => {
     if (!leadId) return
@@ -112,7 +114,7 @@ export default function QuoteBuilderPage() {
   }
 
   const handleCreate = async () => {
-    if (!lead || busy || !quotingAllowed || unpricedLeadParts.length > 0) return
+    if (!lead || busy || !quotingAllowed) return
     setBusy('create')
     setMessage(null)
     const { quote, error } = await createInitialQuote(lead)
@@ -292,13 +294,9 @@ export default function QuoteBuilderPage() {
               <FileText size={36} className="mx-auto text-zinc-300 mb-3" />
               <h1 className="text-lg font-bold text-zinc-900">Customer quote for {lead.customer_name}</h1>
               <p className="text-sm text-zinc-500 mt-1 mb-5">
-                Complete the missing pricing, then review and send the finished quote to the customer.
+                Review the requested areas, adjust the build and pricing, then send the finished quote to the customer.
               </p>
-              {unpricedLeadParts.length > 0 ? (
-                <p className="text-sm text-amber-700">
-                  {unpricedLeadParts.length} {unpricedLeadParts.length === 1 ? 'area still needs' : 'areas still need'} pricing on the lead first: {unpricedLeadParts.map((p) => p.name).join(', ')}.
-                </p>
-              ) : readOnly ? (
+              {readOnly ? (
                 <p className="text-sm text-amber-700">Quotes can't be sent while your account is read-only.</p>
               ) : (
                 <button
@@ -309,6 +307,11 @@ export default function QuoteBuilderPage() {
                   {busy === 'create' ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
                   Review &amp; Send Quote
                 </button>
+              )}
+              {unpricedLeadParts.length > 0 && (
+                <p className="text-sm text-amber-700 mt-3">
+                  {unpricedLeadParts.length} {unpricedLeadParts.length === 1 ? 'area still needs' : 'areas still need'} pricing. In Review &amp; Send Quote you can price these areas, remove them from the quote, or add new build items.
+                </p>
               )}
               {message && <MessageBar message={message} />}
             </div>
@@ -392,8 +395,24 @@ export default function QuoteBuilderPage() {
 
             {/* Parts */}
             <div className="bg-white rounded-2xl border border-zinc-200 p-6">
-              <h2 className="text-sm font-semibold text-zinc-900 mb-1">Selected Parts ({parts.length})</h2>
-              <p className="text-xs text-zinc-500 mb-3">Prices here apply to this quote only.</p>
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-zinc-900 mb-1">Selected Parts ({parts.length})</h2>
+                  <p className="text-xs text-zinc-500">
+                    {editable
+                      ? 'Prices, added and removed items apply to this quote only — the original lead stays as submitted.'
+                      : 'Prices here apply to this quote only.'}
+                  </p>
+                </div>
+                {editable && (
+                  <button
+                    onClick={() => setAddingItem(true)}
+                    className="flex items-center gap-1.5 text-sm font-medium text-brand-600 hover:bg-brand-50 rounded-lg px-3 py-1.5 transition-colors flex-shrink-0"
+                  >
+                    <Plus size={15} /> Add Build Item
+                  </button>
+                )}
+              </div>
               {parts.length === 0 ? (
                 <p className="text-sm text-zinc-400 py-2">No parts on this quote.</p>
               ) : (
@@ -410,15 +429,25 @@ export default function QuoteBuilderPage() {
                         </p>
                       </div>
                       {editable ? (
-                        <div className="w-32 flex-shrink-0">
-                          <NumberField
-                            value={part.price}
-                            prefix="$"
-                            className={inputCls}
-                            onChange={(price) => update({
-                              selected_parts: form!.selected_parts.map((p, i) => (i === idx ? { ...p, price, priced: true } : p)),
-                            })}
-                          />
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <div className="w-32">
+                            <NumberField
+                              value={part.price}
+                              prefix="$"
+                              className={inputCls}
+                              onChange={(price) => update({
+                                selected_parts: form!.selected_parts.map((p, i) => (i === idx ? { ...p, price, priced: true } : p)),
+                              })}
+                            />
+                          </div>
+                          <button
+                            onClick={() => update({ selected_parts: form!.selected_parts.filter((_, i) => i !== idx) })}
+                            className="p-1.5 text-zinc-400 hover:text-red-600 rounded-md transition-colors"
+                            aria-label={`Remove ${part.name}`}
+                            title="Remove from this quote"
+                          >
+                            <Trash2 size={14} />
+                          </button>
                         </div>
                       ) : (
                         <span className="text-sm font-medium text-zinc-900 flex-shrink-0">{formatCurrency(Number(part.price) || 0)}</span>
@@ -657,6 +686,19 @@ export default function QuoteBuilderPage() {
           </div>
         </div>
       </div>
+
+      {addingItem && editable && (
+        <QuoteBuildItemEditor
+          frontUrl={selected.front_image_url}
+          rearUrl={selected.rear_image_url}
+          existingParts={form!.selected_parts}
+          onCancel={() => setAddingItem(false)}
+          onAdd={(part) => {
+            update({ selected_parts: [...form!.selected_parts, part] })
+            setAddingItem(false)
+          }}
+        />
+      )}
     </div>
   )
 }

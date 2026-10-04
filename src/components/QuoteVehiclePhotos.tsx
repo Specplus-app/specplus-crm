@@ -12,11 +12,11 @@ function anchorFor(p: PartEntry): { x: number; y: number } {
 
 // Parts drawn on one photo: custom-build boxes/polygons for that view, plus
 // template highlight shapes (including cross-view shapes) for the rest.
-function partsOnView(parts: PartEntry[], view: View): PartEntry[] {
+export function partsOnView(parts: PartEntry[], view: View): PartEntry[] {
   return [...parts.filter((p) => p.box?.view === view), ...shapedPartsOnView(parts.filter((p) => !p.box), view)]
 }
 
-function Overlays({ parts }: { parts: PartEntry[] }) {
+export function QuotePartOverlays({ parts }: { parts: PartEntry[] }) {
   return (
     <>
       <svg className="absolute inset-0 w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
@@ -110,7 +110,7 @@ export default function QuoteVehiclePhotos({
           <button key={label} type="button" onClick={() => setEnlarged({ url, label, view })} className="group text-left">
             <div className={`relative rounded-2xl overflow-hidden border select-none ${frame}`}>
               <img src={url} alt={label} className="w-full h-auto block transition-transform duration-300 group-hover:scale-[1.02]" />
-              <Overlays parts={partsOnView(parts, view)} />
+              <QuotePartOverlays parts={partsOnView(parts, view)} />
             </div>
             <span className={`text-xs mt-1.5 inline-block ${caption}`}>{label} — tap to enlarge</span>
           </button>
@@ -131,7 +131,7 @@ export default function QuoteVehiclePhotos({
             </div>
             <div className="relative rounded-xl overflow-hidden select-none bg-black">
               <img src={enlarged.url} alt={enlarged.label} className="w-full h-auto block" />
-              <Overlays parts={partsOnView(parts, enlarged.view)} />
+              <QuotePartOverlays parts={partsOnView(parts, enlarged.view)} />
             </div>
           </div>
         </div>

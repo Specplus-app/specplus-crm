@@ -97,9 +97,9 @@ export default function LeadQuoteCard({ lead, readOnly }: { lead: Lead; readOnly
       ) : !latest ? (
         <>
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm text-zinc-500">Complete the missing pricing, then review and send the finished quote to the customer.</p>
+            <p className="text-sm text-zinc-500">Review the requested areas, adjust the build and pricing, then send the finished quote to the customer.</p>
             {!readOnly && (
-              <button onClick={handleCreate} disabled={busy || unpriced.length > 0} className={btnPrimary}>
+              <button onClick={handleCreate} disabled={busy} className={btnPrimary}>
                 {busy ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
                 Review &amp; Send Quote
               </button>
@@ -108,10 +108,9 @@ export default function LeadQuoteCard({ lead, readOnly }: { lead: Lead; readOnly
           {unpriced.length > 0 && (
             <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-3">
               <p className="font-medium">
-                {unpriced.length} of {parts.length} {parts.length === 1 ? 'area still needs' : 'areas still need'} pricing before the quote can be reviewed:
+                {unpriced.length} of {parts.length} {parts.length === 1 ? 'area still needs' : 'areas still need'} pricing.
               </p>
-              <p className="mt-0.5">{unpriced.map((p) => p.name).join(', ')}</p>
-              <p className="mt-0.5 text-amber-600">Use “Set price” on the customer photos or in Build Details above.</p>
+              <p className="mt-0.5">In Review &amp; Send Quote you can price these areas, remove them from the quote, or add new build items.</p>
             </div>
           )}
         </>
