@@ -4,7 +4,8 @@
 1. Lead lifecycle
    - Expands `leads.status` to: new, contacted, quoting, quote_sent, viewed,
      approved, scheduling, scheduled, in_progress, completed, declined, lost, archived.
-   - Migrates legacy `quoted` leads to `quote_sent`.
+   - Migrates legacy `quoted` leads to `quote_sent`. `quoted` itself remains a
+     temporarily accepted legacy value for a backend-first rollout (see below).
    - Adds `leads_status_check`. It is created NOT VALID and only validated when
      every existing row already conforms, so unexpected legacy values cannot
      block the migration (they are reported with a NOTICE instead).
@@ -59,10 +60,16 @@ BEGIN;
 -- status_changed events.
 UPDATE public.leads SET status = 'quote_sent' WHERE status = 'quoted';
 
+-- TEMPORARY LEGACY COMPATIBILITY: `quoted` is still accepted so the backend can
+-- be installed before the new frontend ships. The previously deployed frontend
+-- can still write `quoted` during that rollout window, and it must not hit a
+-- constraint error. The new frontend never offers `quoted`. Once the new
+-- frontend is fully deployed, a later cleanup migration can convert any
+-- remaining `quoted` rows to `quote_sent` and drop `quoted` from this list.
 ALTER TABLE public.leads DROP CONSTRAINT IF EXISTS leads_status_check;
 ALTER TABLE public.leads
   ADD CONSTRAINT leads_status_check CHECK (status IN (
-    'new', 'contacted', 'quoting', 'quote_sent', 'viewed', 'approved',
+    'new', 'contacted', 'quoted', 'quoting', 'quote_sent', 'viewed', 'approved',
     'scheduling', 'scheduled', 'in_progress', 'completed', 'declined', 'lost', 'archived'
   )) NOT VALID;
 
@@ -71,7 +78,7 @@ BEGIN
   IF EXISTS (
     SELECT 1 FROM public.leads
     WHERE status NOT IN (
-      'new', 'contacted', 'quoting', 'quote_sent', 'viewed', 'approved',
+      'new', 'contacted', 'quoted', 'quoting', 'quote_sent', 'viewed', 'approved',
       'scheduling', 'scheduled', 'in_progress', 'completed', 'declined', 'lost', 'archived'
     )
   ) THEN
