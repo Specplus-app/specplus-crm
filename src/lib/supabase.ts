@@ -405,6 +405,47 @@ export const LEAD_STATUSES: { value: LeadStatus; label: string; color: string; d
   { value: 'archived', label: 'Archived', color: 'bg-zinc-100 text-zinc-500 border-zinc-200', dotColor: 'bg-zinc-400' },
 ]
 
+// Shop-facing workflow: what the shop is doing. leads.status also stores
+// automatic quote states (quote_sent, viewed, approved, declined); those are
+// shown via the quote badge/card and folded into a workflow stage here.
+export type WorkflowStatus =
+  | 'new'
+  | 'contacted'
+  | 'quoting'
+  | 'scheduling'
+  | 'scheduled'
+  | 'in_progress'
+  | 'completed'
+  | 'lost'
+  | 'archived'
+
+export const WORKFLOW_STATUSES: {
+  value: WorkflowStatus
+  label: string
+  dotColor: string
+  // Raw leads.status values that belong to this workflow stage.
+  // `quoted` is the temporary legacy value still accepted during rollout.
+  rawStatuses: string[]
+}[] = [
+  { value: 'new', label: 'New', dotColor: 'bg-blue-500', rawStatuses: ['new'] },
+  { value: 'contacted', label: 'Contacted', dotColor: 'bg-amber-500', rawStatuses: ['contacted'] },
+  { value: 'quoting', label: 'Quoting', dotColor: 'bg-violet-500', rawStatuses: ['quoting', 'quote_sent', 'viewed', 'declined', 'quoted'] },
+  { value: 'scheduling', label: 'Scheduling', dotColor: 'bg-sky-500', rawStatuses: ['scheduling', 'approved'] },
+  { value: 'scheduled', label: 'Scheduled', dotColor: 'bg-cyan-500', rawStatuses: ['scheduled'] },
+  { value: 'in_progress', label: 'In Progress', dotColor: 'bg-indigo-500', rawStatuses: ['in_progress'] },
+  { value: 'completed', label: 'Completed', dotColor: 'bg-green-600', rawStatuses: ['completed'] },
+  { value: 'lost', label: 'Lost', dotColor: 'bg-rose-400', rawStatuses: ['lost'] },
+  { value: 'archived', label: 'Archived', dotColor: 'bg-zinc-400', rawStatuses: ['archived'] },
+]
+
+export function workflowStatusFor(status: string): WorkflowStatus {
+  return WORKFLOW_STATUSES.find((w) => w.rawStatuses.includes(status))?.value ?? 'new'
+}
+
+export function getWorkflowMeta(status: WorkflowStatus) {
+  return WORKFLOW_STATUSES.find((w) => w.value === status) ?? WORKFLOW_STATUSES[0]
+}
+
 export function getStatusMeta(status: LeadStatus) {
   return LEAD_STATUSES.find((s) => s.value === status) ?? LEAD_STATUSES[0]
 }

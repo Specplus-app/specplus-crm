@@ -1,18 +1,33 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
-import { supabase, Lead, LeadStatus, LEAD_STATUSES, formatCurrency, formatDate } from '../lib/supabase'
+import { supabase, Lead, LeadStatus, QuoteStatus, WorkflowStatus, getWorkflowMeta, formatCurrency, formatDate } from '../lib/supabase'
+import { QUOTE_STATUS_META } from '../lib/quotes'
 import StatusSelect from '../components/StatusSelect'
 import { useShopBilling } from '../lib/billing'
 import { LoadingScreen } from '../components/LoadingScreen'
-import { Search, Inbox, Send, ThumbsUp, Clock, CheckCircle2, Mail, Phone, MapPin, ChevronRight, Link2, Copy, Check, ExternalLink, PartyPopper, X, type LucideIcon } from 'lucide-react'
+import { Search, Inbox, Send, ThumbsUp, Clock, CheckCircle2, Mail, Phone, MapPin, ChevronRight, ChevronDown, Link2, Copy, Check, ExternalLink, PartyPopper, X, type LucideIcon } from 'lucide-react'
 
 const PUBLIC_QUOTE_ORIGIN = 'https://quotes.specplus.app'
 
-const STATUS_FILTERS: { value: LeadStatus | 'all'; label: string }[] = [
-  { value: 'all', label: 'All' },
-  ...LEAD_STATUSES.map((s) => ({ value: s.value, label: s.label })),
-]
+type WorkflowFilter = WorkflowStatus | 'all'
+
+const PRIMARY_FILTERS: WorkflowFilter[] = ['all', 'new', 'contacted', 'quoting', 'scheduling', 'scheduled', 'in_progress', 'completed']
+const MORE_FILTERS: WorkflowStatus[] = ['lost', 'archived']
+
+const filterLabel = (f: WorkflowFilter) => (f === 'all' ? 'All' : getWorkflowMeta(f).label)
+
+const QUOTE_BADGE_COLORS: Record<QuoteStatus, string> = {
+  draft: 'text-slate-300 bg-white/5 border-white/15',
+  sent: 'text-purple-200 bg-purple-500/10 border-purple-500/30',
+  viewed: 'text-fuchsia-200 bg-fuchsia-500/10 border-fuchsia-500/30',
+  approved: 'text-emerald-200 bg-emerald-500/10 border-emerald-500/30',
+  declined: 'text-red-200 bg-red-500/10 border-red-500/30',
+}
+
+// Keeps each `.in()` request URL comfortably short; still one query per batch,
+// never one per lead.
+const QUOTE_LOOKUP_BATCH = 150
 
 export default function ShopDashboard() {
   const { profile, profileLoading } = useAuth()
@@ -22,7 +37,9 @@ export default function ShopDashboard() {
   const [showWelcome, setShowWelcome] = useState(Boolean((location.state as { welcome?: boolean } | null)?.welcome))
   const [leads, setLeads] = useState<Lead[]>([])
   const [loading, setLoading] = useState(true)
-  const [statusFilter, setStatusFilter] = useState<LeadStatus | 'all'>('all')
+  const [statusFilter, setStatusFilter] = useState<WorkflowFilter>('all')
+  const [moreOpen, setMoreOpen] = useState(false)
+  const [latestQuotes, setLatestQuotes] = useState<Map<string, QuoteStatus>>(new Map())
   const [search, setSearch] = useState('')
   const [copied, setCopied] = useState(false)
   const [shopSlug, setShopSlug] = useState<string | null>(null)
@@ -86,14 +103,42 @@ export default function ShopDashboard() {
       .eq('shop_id', profile.shop_id)
       .order('submitted_at', { ascending: false })
     if (statusFilter !== 'all') {
-      query = query.eq('status', statusFilter)
+      // Workflow stages cover several raw statuses (e.g. Quoting includes
+      // quote_sent/viewed/declined).
+      query = query.in('status', getWorkflowMeta(statusFilter).rawStatuses)
     }
     const { data, error } = await query
     if (error) {
       console.error('Failed to load leads:', error.message)
-    } else {
-      setLeads((data ?? []) as Lead[])
+      setLoading(false)
+      return
     }
+    const rows = (data ?? []) as Lead[]
+
+    // Latest quote per lead, batched (no per-lead queries).
+    const latest = new Map<string, QuoteStatus>()
+    const ids = rows.map((l) => l.id)
+    const batches: string[][] = []
+    for (let i = 0; i < ids.length; i += QUOTE_LOOKUP_BATCH) batches.push(ids.slice(i, i + QUOTE_LOOKUP_BATCH))
+    const results = await Promise.all(batches.map((batch) =>
+      supabase
+        .from('quotes')
+        .select('lead_id, status, revision_number')
+        .in('lead_id', batch)
+        .order('revision_number', { ascending: false })
+    ))
+    for (const { data: quoteRows, error: quoteError } of results) {
+      if (quoteError) {
+        console.error('Failed to load quotes:', quoteError.message)
+        continue
+      }
+      for (const q of (quoteRows ?? []) as { lead_id: string; status: QuoteStatus }[]) {
+        if (!latest.has(q.lead_id)) latest.set(q.lead_id, q.status)
+      }
+    }
+
+    setLeads(rows)
+    setLatestQuotes(latest)
     setLoading(false)
   }, [profile?.shop_id, statusFilter])
 
@@ -147,9 +192,13 @@ export default function ShopDashboard() {
   const stats = {
     total: leads.length,
     new: leads.filter((l) => l.status === 'new').length,
-    // Quotes the customer has received but not yet answered.
-    awaiting: leads.filter((l) => l.status === 'quote_sent' || l.status === 'viewed').length,
-    approved: leads.filter((l) => l.status === 'approved').length,
+    // Based on each lead's latest quote, so these stay accurate after the shop
+    // moves the workflow on (e.g. an approved quote on a Scheduled job).
+    awaiting: leads.filter((l) => {
+      const q = latestQuotes.get(l.id)
+      return q === 'sent' || q === 'viewed'
+    }).length,
+    approved: leads.filter((l) => latestQuotes.get(l.id) === 'approved').length,
     completed: leads.filter((l) => l.status === 'completed').length,
   }
 
@@ -239,20 +288,56 @@ export default function ShopDashboard() {
               className="w-full bg-obsidian-900/60 border border-white/10 text-slate-200 placeholder-slate-500 rounded-lg pl-10 pr-3 py-2 text-sm focus:outline-none focus:border-cobalt-500/50 focus:ring-1 focus:ring-cobalt-500/50 transition-all"
             />
           </div>
-          <div className="flex gap-1.5 overflow-x-auto pb-1">
-            {STATUS_FILTERS.map((f) => (
+          <div className="flex gap-1.5 items-start">
+            <div className="flex gap-1.5 overflow-x-auto pb-1">
+              {PRIMARY_FILTERS.map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setStatusFilter(f)}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
+                    statusFilter === f
+                      ? 'bg-cobalt-600 text-white border border-cobalt-500/50 shadow-glow-blue'
+                      : 'bg-obsidian-900/60 text-slate-400 border border-white/10 hover:bg-white/5'
+                  }`}
+                >
+                  {filterLabel(f)}
+                </button>
+              ))}
+            </div>
+            <div className="relative flex-shrink-0">
               <button
-                key={f.value}
-                onClick={() => setStatusFilter(f.value)}
-                className={`px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
-                  statusFilter === f.value
+                onClick={() => setMoreOpen((o) => !o)}
+                aria-haspopup="menu"
+                aria-expanded={moreOpen}
+                className={`flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
+                  MORE_FILTERS.includes(statusFilter as WorkflowStatus)
                     ? 'bg-cobalt-600 text-white border border-cobalt-500/50 shadow-glow-blue'
                     : 'bg-obsidian-900/60 text-slate-400 border border-white/10 hover:bg-white/5'
                 }`}
               >
-                {f.label}
+                {MORE_FILTERS.includes(statusFilter as WorkflowStatus) ? filterLabel(statusFilter) : 'More'}
+                <ChevronDown size={14} />
               </button>
-            ))}
+              {moreOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setMoreOpen(false)} />
+                  <div role="menu" className="absolute right-0 mt-1 z-20 min-w-[9rem] bg-obsidian-900 border border-white/10 rounded-lg shadow-lg shadow-black/40 py-1">
+                    {MORE_FILTERS.map((f) => (
+                      <button
+                        key={f}
+                        role="menuitem"
+                        onClick={() => { setStatusFilter(f); setMoreOpen(false) }}
+                        className={`w-full text-left px-3 py-2 text-sm transition-colors ${
+                          statusFilter === f ? 'text-white bg-cobalt-600/30' : 'text-slate-300 hover:bg-white/5'
+                        }`}
+                      >
+                        {filterLabel(f)}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
 
@@ -286,6 +371,11 @@ export default function ShopDashboard() {
                     <div className="flex items-center gap-2 mb-1">
                       <h3 className="font-semibold text-slate-100 truncate">{lead.customer_name}</h3>
                       <ChevronRight size={16} className="text-slate-500 group-hover:text-slate-300 transition-colors flex-shrink-0" />
+                      {latestQuotes.has(lead.id) && (
+                        <span className={`text-[11px] font-medium border rounded-md px-1.5 py-0.5 whitespace-nowrap flex-shrink-0 ${QUOTE_BADGE_COLORS[latestQuotes.get(lead.id)!]}`}>
+                          Quote: {QUOTE_STATUS_META[latestQuotes.get(lead.id)!].label}
+                        </span>
+                      )}
                     </div>
                     <p className="text-sm text-slate-400 truncate">{lead.vehicle_name}</p>
                     <div className="flex flex-wrap items-center gap-3 mt-2 text-xs text-slate-400">

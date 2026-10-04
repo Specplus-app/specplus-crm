@@ -423,7 +423,10 @@ export default function LeadDetailPage() {
                 )}
               </div>
             </div>
-            <StatusSelect status={lead.status} onChange={handleStatusChange} disabled={readOnly} />
+            <div className="flex flex-col items-end gap-1 flex-shrink-0">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">Workflow</span>
+              <StatusSelect status={lead.status} onChange={handleStatusChange} disabled={readOnly} />
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
