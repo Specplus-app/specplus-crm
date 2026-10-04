@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useParams } from 'react-router-dom'
-import { supabase, PublicQuote, PartEntry, formatCurrency, formatDateTime, getHighlightColor } from '../lib/supabase'
-import { formatQuoteDate, lineItemTotal, quoteViewSessionId } from '../lib/quotes'
+import { supabase, PublicQuote, PublicQuoteMessage, PartEntry, formatCurrency, formatDateTime, getHighlightColor } from '../lib/supabase'
+import { MESSAGE_MAX_LENGTH, formatQuoteDate, lineItemTotal, quoteViewSessionId } from '../lib/quotes'
 import QuoteVehiclePhotos from '../components/QuoteVehiclePhotos'
-import { AlertCircle, CheckCircle2, Clock, Eye, FileText, Loader2, Mail, Package, Palette, Phone, RefreshCw, XCircle } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Clock, Eye, FileText, Loader2, MessageSquare, Package, Palette, Phone, RefreshCw, Send, XCircle } from 'lucide-react'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -14,11 +14,19 @@ const recordedViewTokens = new Set<string>()
 const VIEW_DELAY_MS = 2000
 
 const RESPONSE_ERRORS: Record<string, string> = {
-  expired: 'This quote has expired, so it can no longer be approved or declined. Please contact the shop for an updated quote.',
+  expired: 'This quote has expired, so it can no longer be approved. Send the shop a message below to ask for an updated quote.',
   superseded: 'This quote has been revised. Please use the link to the latest quote from the shop.',
   already_responded: 'A response has already been recorded for this quote.',
-  staff_preview: 'You are signed in as shop staff. Customer responses cannot be recorded from a staff account.',
-  invalid_state: 'This quote can no longer be approved or declined.',
+  staff_preview: 'You are signed in as shop staff. Customer approvals cannot be recorded from a staff account.',
+  invalid_state: 'This quote can no longer be approved.',
+  not_found: 'Quote not found.',
+}
+
+const MESSAGE_ERRORS: Record<string, string> = {
+  superseded: 'This quote has been revised. Please use the latest quote link to continue the conversation.',
+  staff_preview: 'You are signed in as shop staff. Reply to the customer from the lead in SpecPlus instead.',
+  invalid_message: `Messages must be between 1 and ${MESSAGE_MAX_LENGTH} characters.`,
+  rate_limited: 'You have sent several messages in a short time. Please wait a few minutes and try again.',
   not_found: 'Quote not found.',
 }
 
@@ -26,7 +34,7 @@ export default function CustomerQuotePage() {
   const { token } = useParams<{ token: string }>()
   const [quote, setQuote] = useState<PublicQuote | null>(null)
   const [loading, setLoading] = useState(true)
-  const [confirming, setConfirming] = useState<'approve' | 'decline' | null>(null)
+  const [confirming, setConfirming] = useState(false)
   const [responding, setResponding] = useState(false)
   const [responseError, setResponseError] = useState<string | null>(null)
 
@@ -97,16 +105,16 @@ export default function CustomerQuotePage() {
     if (!token || !confirming || responding) return
     setResponding(true)
     setResponseError(null)
-    const { data, error } = await supabase.rpc('respond_to_quote', { p_token: token, p_response: confirming })
+    const { data, error } = await supabase.rpc('respond_to_quote', { p_token: token, p_response: 'approve' })
     setResponding(false)
-    setConfirming(null)
+    setConfirming(false)
     if (error) {
-      setResponseError('Something went wrong while recording your response. Please try again.')
+      setResponseError('Something went wrong while recording your approval. Please try again.')
       return
     }
     const result = data as { ok: boolean; error?: string } | null
     if (!result?.ok) {
-      setResponseError(RESPONSE_ERRORS[result?.error ?? ''] ?? 'Your response could not be recorded. Please try again.')
+      setResponseError(RESPONSE_ERRORS[result?.error ?? ''] ?? 'Your approval could not be recorded. Please try again.')
     }
     await loadQuote()
   }
@@ -177,12 +185,12 @@ export default function CustomerQuotePage() {
         )}
         {quote.status === 'declined' && (
           <Banner tone="neutral" icon={XCircle}>
-            You declined this quote{quote.declined_at ? ` on ${formatDateTime(quote.declined_at)}` : ''}. Reach out to {quote.shop.name} if you would like changes.
+            This quote was declined{quote.declined_at ? ` on ${formatDateTime(quote.declined_at)}` : ''}. Send {quote.shop.name} a message below if you would like changes.
           </Banner>
         )}
         {!responded && quote.is_expired && (
           <Banner tone="warning" icon={Clock}>
-            This quote expired{quote.expires_at ? ` on ${formatQuoteDate(quote.expires_at)}` : ''}. Please contact {quote.shop.name} for an updated quote.
+            This quote expired{quote.expires_at ? ` on ${formatQuoteDate(quote.expires_at)}` : ''}. Send {quote.shop.name} a message below to ask for an updated quote.
           </Banner>
         )}
         {responseError && <Banner tone="error" icon={AlertCircle}>{responseError}</Banner>}
@@ -281,57 +289,55 @@ export default function CustomerQuotePage() {
           </div>
         )}
 
-        {/* Response */}
+        {/* Conversation */}
+        <CustomerConversation
+          token={token!}
+          shopName={quote.shop.name}
+          currentRevision={quote.revision_number}
+          disabledReason={
+            quote.viewer_is_staff
+              ? 'Staff preview — reply to the customer from the lead in SpecPlus.'
+              : quote.is_superseded
+                ? 'This quote has been revised. Please use the latest quote link to continue the conversation.'
+                : null
+          }
+        />
+
+        {/* Approval */}
         {canRespond && (
           <div className="bg-obsidian-900/60 backdrop-blur-xl rounded-2xl border border-white/10 p-6 mb-5">
             <h2 className="text-sm font-semibold text-white mb-1">Ready to move forward?</h2>
-            <p className="text-sm text-slate-400 mb-4">Let {quote.shop.name} know whether you would like to go ahead with this quote.</p>
-            <div className="flex flex-col sm:flex-row gap-3">
-              <button
-                onClick={() => { setResponseError(null); setConfirming('approve') }}
-                disabled={quote.viewer_is_staff}
-                className="flex-1 flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl px-5 py-3 transition-colors"
-              >
-                <CheckCircle2 size={18} /> Approve Quote
-              </button>
-              <button
-                onClick={() => { setResponseError(null); setConfirming('decline') }}
-                disabled={quote.viewer_is_staff}
-                className="flex-1 flex items-center justify-center gap-2 bg-white/5 hover:bg-white/10 border border-white/15 disabled:opacity-50 disabled:cursor-not-allowed text-slate-200 font-semibold rounded-xl px-5 py-3 transition-colors"
-              >
-                <XCircle size={18} /> Decline Quote
-              </button>
-            </div>
+            <p className="text-sm text-slate-400 mb-4">
+              Review the quote above. If everything looks good, approve it below. If you need a change, send the shop a message first.
+            </p>
+            <button
+              onClick={() => { setResponseError(null); setConfirming(true) }}
+              disabled={quote.viewer_is_staff}
+              className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl px-5 py-3 transition-colors"
+            >
+              <CheckCircle2 size={18} /> Approve Quote
+            </button>
           </div>
         )}
 
-        {(quote.shop.contact_email || quote.shop.phone) && (
-          <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-1 text-xs text-slate-500 mt-8">
-            <span>Questions about this quote?</span>
-            {quote.shop.contact_email && (
-              <a href={`mailto:${quote.shop.contact_email}`} className="flex items-center gap-1 text-slate-400 hover:text-white"><Mail size={12} /> {quote.shop.contact_email}</a>
-            )}
-            {quote.shop.phone && (
-              <a href={`tel:${quote.shop.phone}`} className="flex items-center gap-1 text-slate-400 hover:text-white"><Phone size={12} /> {quote.shop.phone}</a>
-            )}
+        {quote.shop.phone && (
+          <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs text-slate-500 mt-8">
+            <span>Prefer to talk?</span>
+            <a href={`tel:${quote.shop.phone}`} className="flex items-center gap-1 text-slate-400 hover:text-white"><Phone size={12} /> {quote.shop.phone}</a>
           </div>
         )}
       </div>
 
       {confirming && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => { if (!responding) setConfirming(null) }}>
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => { if (!responding) setConfirming(false) }}>
           <div className="w-full max-w-md bg-obsidian-900 border border-white/10 rounded-2xl shadow-glass-card p-6" onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-lg font-bold text-white">
-              {confirming === 'approve' ? 'Approve this quote?' : 'Decline this quote?'}
-            </h2>
+            <h2 className="text-lg font-bold text-white">Approve this quote?</h2>
             <p className="text-sm text-slate-400 mt-2 leading-relaxed">
-              {confirming === 'approve'
-                ? `You're approving Quote #${quote.revision_number} for ${formatCurrency(Number(quote.grand_total))}. ${quote.shop.name} will be notified and will follow up about next steps.`
-                : `You're declining Quote #${quote.revision_number}. ${quote.shop.name} will be notified.`}
+              {`You're approving Quote #${quote.revision_number} for ${formatCurrency(Number(quote.grand_total))}. ${quote.shop.name} will be notified and will follow up about next steps.`}
             </p>
             <div className="flex gap-3 mt-6">
               <button
-                onClick={() => setConfirming(null)}
+                onClick={() => setConfirming(false)}
                 disabled={responding}
                 className="flex-1 bg-white/5 hover:bg-white/10 border border-white/15 text-slate-200 font-medium rounded-xl px-4 py-2.5 transition-colors disabled:opacity-50"
               >
@@ -340,16 +346,129 @@ export default function CustomerQuotePage() {
               <button
                 onClick={submitResponse}
                 disabled={responding}
-                className={`flex-1 flex items-center justify-center gap-2 font-semibold rounded-xl px-4 py-2.5 transition-colors disabled:opacity-60 text-white ${
-                  confirming === 'approve' ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-red-600 hover:bg-red-500'
-                }`}
+                className="flex-1 flex items-center justify-center gap-2 font-semibold rounded-xl px-4 py-2.5 transition-colors disabled:opacity-60 text-white bg-emerald-600 hover:bg-emerald-500"
               >
                 {responding && <Loader2 size={16} className="animate-spin" />}
-                {confirming === 'approve' ? 'Yes, approve' : 'Yes, decline'}
+                Yes, approve
               </button>
             </div>
           </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+// Shared customer/shop thread for this quote. Shows earlier revisions' messages
+// too (the server never returns messages from later revisions).
+function CustomerConversation({
+  token, shopName, currentRevision, disabledReason,
+}: {
+  token: string
+  shopName: string
+  currentRevision: number
+  disabledReason: string | null
+}) {
+  const [messages, setMessages] = useState<PublicQuoteMessage[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const loadMessages = useCallback(async () => {
+    const { data, error: loadError } = await supabase.rpc('get_public_quote_messages', { p_token: token })
+    if (loadError) {
+      console.error('Failed to load messages:', loadError.message)
+    } else {
+      setMessages(Array.isArray(data) ? (data as PublicQuoteMessage[]) : [])
+    }
+    setLoaded(true)
+  }, [token])
+
+  useEffect(() => {
+    loadMessages()
+  }, [loadMessages])
+
+  const send = async () => {
+    const body = draft.trim()
+    if (!body || sending || disabledReason) return
+    setSending(true)
+    setError(null)
+    const { data, error: sendError } = await supabase.rpc('send_public_quote_message', { p_token: token, p_body: body })
+    setSending(false)
+    if (sendError) {
+      setError('Your message could not be sent. Please try again.')
+      return
+    }
+    const result = data as { ok: boolean; error?: string } | null
+    if (!result?.ok) {
+      setError(MESSAGE_ERRORS[result?.error ?? ''] ?? 'Your message could not be sent. Please try again.')
+      return
+    }
+    setDraft('')
+    await loadMessages()
+  }
+
+  const multipleRevisions = new Set(messages.map((m) => m.revision_number)).size > 1 ||
+    messages.some((m) => m.revision_number !== currentRevision)
+
+  return (
+    <div className="bg-obsidian-900/60 backdrop-blur-xl rounded-2xl border border-white/10 p-6 mb-5">
+      <h2 className="text-sm font-semibold text-white mb-1 flex items-center gap-2">
+        <MessageSquare size={15} className="text-cobalt-300" />
+        Questions or changes?
+      </h2>
+      <p className="text-sm text-slate-400 mb-4">
+        Send a message to {shopName}. Your conversation stays with this quote so everyone has the same project history.
+      </p>
+
+      {loaded && messages.length > 0 && (
+        <div className="space-y-3 mb-4">
+          {messages.map((m, idx) => {
+            const mine = m.sender_type === 'customer'
+            const showRevision = multipleRevisions && (idx === 0 || messages[idx - 1].revision_number !== m.revision_number)
+            return (
+              <div key={m.id}>
+                {showRevision && (
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 text-center my-2">Quote #{m.revision_number}</p>
+                )}
+                <div className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 ${mine ? 'bg-cobalt-600/80 text-white' : 'bg-white/5 border border-white/10 text-slate-200'}`}>
+                    <p className={`text-[11px] font-semibold mb-0.5 ${mine ? 'text-cobalt-100' : 'text-slate-400'}`}>{mine ? 'You' : shopName || 'Shop'}</p>
+                    <p className="text-sm whitespace-pre-wrap break-words leading-relaxed">{m.body}</p>
+                    <p className={`text-[10px] mt-1 ${mine ? 'text-cobalt-100/80' : 'text-slate-500'}`}>{formatDateTime(m.created_at)}</p>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {disabledReason ? (
+        <p className="text-sm text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2">{disabledReason}</p>
+      ) : (
+        <>
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Ask a question or request a change…"
+            rows={3}
+            maxLength={MESSAGE_MAX_LENGTH}
+            className="w-full bg-obsidian-950/80 border border-white/10 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cobalt-500/50 focus:ring-1 focus:ring-cobalt-500/50 resize-y"
+          />
+          {error && <p className="text-sm text-red-300 mt-2">{error}</p>}
+          <div className="flex justify-end mt-2">
+            <button
+              onClick={send}
+              disabled={sending || !draft.trim()}
+              className="flex items-center gap-2 bg-cobalt-600 hover:bg-cobalt-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-xl px-4 py-2 transition-colors"
+            >
+              {sending ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
+              Send Message
+            </button>
+          </div>
+        </>
       )}
     </div>
   )

@@ -248,6 +248,31 @@ export type LeadEventType =
   | 'quote_viewed'
   | 'quote_approved'
   | 'quote_declined'
+  | 'quote_message_added'
+
+export type QuoteMessageSenderType = 'customer' | 'shop_user' | 'admin'
+
+// Internal row, readable by shop staff through RLS.
+export type QuoteMessage = {
+  id: string
+  lead_id: string
+  quote_id: string
+  shop_id: string
+  sender_type: QuoteMessageSenderType
+  sender_id: string | null
+  body: string
+  created_at: string
+}
+
+// Customer-safe shape returned by get_public_quote_messages (no sender/shop ids).
+export type PublicQuoteMessage = {
+  id: string
+  quote_id: string
+  revision_number: number
+  sender_type: QuoteMessageSenderType
+  body: string
+  created_at: string
+}
 
 export type LeadEventActorType = 'customer' | 'shop_user' | 'admin' | 'system'
 

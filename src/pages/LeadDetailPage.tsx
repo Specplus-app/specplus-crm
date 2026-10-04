@@ -7,6 +7,7 @@ import { useShopBilling } from '../lib/billing'
 import ShopCustomPricingModal from '../components/ShopCustomPricingModal'
 import LeadQuoteCard from '../components/LeadQuoteCard'
 import LeadTimeline from '../components/LeadTimeline'
+import LeadQuoteConversation from '../components/LeadQuoteConversation'
 import { ArrowLeft, Mail, Phone, MapPin, Calendar, DollarSign, Package, Send, User, Clock, Layers, Palette, Image as ImageIcon, PencilRuler, type LucideIcon } from 'lucide-react'
 
 const customUploadUrl = (path: string | null): string | null =>
@@ -582,6 +583,7 @@ export default function LeadDetailPage() {
         {/* Only custom-upload leads need a separate customer quote; preconfigured
             leads already carry the instant price the customer saw. */}
         {lead.is_custom && <LeadQuoteCard lead={lead} readOnly={readOnly} />}
+        {lead.is_custom && <LeadQuoteConversation lead={lead} readOnly={readOnly} />}
 
         <LeadTimeline leadId={lead.id} refreshKey={lead.status} />
 

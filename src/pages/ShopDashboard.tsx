@@ -6,7 +6,7 @@ import { QUOTE_STATUS_META } from '../lib/quotes'
 import StatusSelect from '../components/StatusSelect'
 import { useShopBilling } from '../lib/billing'
 import { LoadingScreen } from '../components/LoadingScreen'
-import { Search, Inbox, Send, ThumbsUp, Clock, CheckCircle2, Mail, Phone, MapPin, ChevronRight, ChevronDown, Link2, Copy, Check, ExternalLink, PartyPopper, X, type LucideIcon } from 'lucide-react'
+import { Search, Inbox, Send, ThumbsUp, Clock, CheckCircle2, Mail, Phone, MapPin, ChevronRight, ChevronDown, MessageSquare, Link2, Copy, Check, ExternalLink, PartyPopper, X, type LucideIcon } from 'lucide-react'
 
 const PUBLIC_QUOTE_ORIGIN = 'https://quotes.specplus.app'
 
@@ -40,6 +40,7 @@ export default function ShopDashboard() {
   const [statusFilter, setStatusFilter] = useState<WorkflowFilter>('all')
   const [moreOpen, setMoreOpen] = useState(false)
   const [latestQuotes, setLatestQuotes] = useState<Map<string, QuoteStatus>>(new Map())
+  const [messageCounts, setMessageCounts] = useState<Map<string, number>>(new Map())
   const [search, setSearch] = useState('')
   const [copied, setCopied] = useState(false)
   const [shopSlug, setShopSlug] = useState<string | null>(null)
@@ -137,8 +138,27 @@ export default function ShopDashboard() {
       }
     }
 
+    // Quote conversation message counts for custom leads, batched the same way.
+    const counts = new Map<string, number>()
+    const customIds = rows.filter((l) => l.is_custom).map((l) => l.id)
+    const messageBatches: string[][] = []
+    for (let i = 0; i < customIds.length; i += QUOTE_LOOKUP_BATCH) messageBatches.push(customIds.slice(i, i + QUOTE_LOOKUP_BATCH))
+    const messageResults = await Promise.all(messageBatches.map((batch) =>
+      supabase.from('quote_messages').select('lead_id').in('lead_id', batch)
+    ))
+    for (const { data: messageRows, error: messageError } of messageResults) {
+      if (messageError) {
+        console.error('Failed to load message counts:', messageError.message)
+        continue
+      }
+      for (const m of (messageRows ?? []) as { lead_id: string }[]) {
+        counts.set(m.lead_id, (counts.get(m.lead_id) ?? 0) + 1)
+      }
+    }
+
     setLeads(rows)
     setLatestQuotes(latest)
+    setMessageCounts(counts)
     setLoading(false)
   }, [profile?.shop_id, statusFilter])
 
@@ -374,6 +394,12 @@ export default function ShopDashboard() {
                       {latestQuotes.has(lead.id) && (
                         <span className={`text-[11px] font-medium border rounded-md px-1.5 py-0.5 whitespace-nowrap flex-shrink-0 ${QUOTE_BADGE_COLORS[latestQuotes.get(lead.id)!]}`}>
                           Quote: {QUOTE_STATUS_META[latestQuotes.get(lead.id)!].label}
+                        </span>
+                      )}
+                      {(messageCounts.get(lead.id) ?? 0) > 0 && (
+                        <span className="flex items-center gap-1 text-[11px] font-medium border rounded-md px-1.5 py-0.5 whitespace-nowrap flex-shrink-0 text-sky-200 bg-sky-500/10 border-sky-500/30">
+                          <MessageSquare size={11} />
+                          {messageCounts.get(lead.id)} {messageCounts.get(lead.id) === 1 ? 'message' : 'messages'}
                         </span>
                       )}
                     </div>

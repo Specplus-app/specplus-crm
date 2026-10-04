@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase, LeadEvent, formatDateTime } from '../lib/supabase'
 import { describeLeadEvent } from '../lib/quotes'
-import { Activity, CheckCircle2, Eye, FilePlus2, Inbox, RefreshCw, Send, Shuffle, XCircle, type LucideIcon } from 'lucide-react'
+import { Activity, CheckCircle2, Eye, FilePlus2, Inbox, MessageSquare, RefreshCw, Send, Shuffle, XCircle, type LucideIcon } from 'lucide-react'
 
 const EVENT_ICONS: Record<string, { icon: LucideIcon; color: string }> = {
   lead_created: { icon: Inbox, color: 'text-blue-600 bg-blue-50 border-blue-200' },
@@ -12,6 +12,7 @@ const EVENT_ICONS: Record<string, { icon: LucideIcon; color: string }> = {
   quote_viewed: { icon: Eye, color: 'text-fuchsia-600 bg-fuchsia-50 border-fuchsia-200' },
   quote_approved: { icon: CheckCircle2, color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
   quote_declined: { icon: XCircle, color: 'text-red-600 bg-red-50 border-red-200' },
+  quote_message_added: { icon: MessageSquare, color: 'text-sky-600 bg-sky-50 border-sky-200' },
 }
 
 const DEFAULT_ICON = { icon: Activity, color: 'text-zinc-600 bg-zinc-50 border-zinc-200' }

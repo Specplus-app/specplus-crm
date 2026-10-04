@@ -7,6 +7,22 @@ const corsHeaders = {
 }
 
 const DEFAULT_PUBLIC_QUOTE_ORIGIN = 'https://quotes.specplus.app'
+// Only hostnames ending exactly with this suffix are trusted, never arbitrary
+// *.vercel.app domains.
+const PREVIEW_HOST_SUFFIX = '-spec-plus.vercel.app'
+
+function approvedPreviewOrigin(origin: string | null): string | null {
+  if (!origin) return null
+  try {
+    const url = new URL(origin)
+    if (url.protocol === 'https:' && url.hostname.endsWith(PREVIEW_HOST_SUFFIX) && !url.port) {
+      return `https://${url.hostname}`
+    }
+  } catch {
+    // Malformed Origin header: fall through to the default.
+  }
+  return null
+}
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const escapeHtml = (s: string) =>
@@ -51,7 +67,11 @@ Deno.serve(async (req: Request) => {
     const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     const fromEmail = Deno.env.get('RESEND_FROM_EMAIL') ?? 'quotes@specplus.app'
-    const publicOrigin = (Deno.env.get('PUBLIC_QUOTE_ORIGIN') ?? DEFAULT_PUBLIC_QUOTE_ORIGIN).replace(/\/+$/, '')
+    // Approved SpecPlus Vercel previews get links back to that preview so PR
+    // testing works end to end; everything else (including crm.specplus.app)
+    // uses the configured/public quotes origin.
+    const publicOrigin = approvedPreviewOrigin(req.headers.get('Origin'))
+      ?? (Deno.env.get('PUBLIC_QUOTE_ORIGIN') ?? DEFAULT_PUBLIC_QUOTE_ORIGIN).replace(/\/+$/, '')
 
     const authHeader = req.headers.get('Authorization') ?? ''
     const token = authHeader.replace(/^Bearer\s+/i, '')
@@ -147,16 +167,16 @@ Deno.serve(async (req: Request) => {
         </td></tr>
         <tr><td style="padding:16px 32px 8px;">
           <p style="margin:0;color:#cbd5e1;font-size:15px;line-height:1.6;">Hi ${safeName},</p>
-          <p style="margin:12px 0 0;color:#cbd5e1;font-size:15px;line-height:1.6;">We've prepared a quote for your <strong style="color:#ffffff;">${safeVehicle}</strong>. You can review the itemized pricing and approve or decline it online.</p>
+          <p style="margin:12px 0 0;color:#cbd5e1;font-size:15px;line-height:1.6;">We've prepared a quote for your <strong style="color:#ffffff;">${safeVehicle}</strong>. Please review the itemized pricing and project details. If everything looks good, you can approve the quote online. If you have a question or would like something changed, send the shop a message directly from the quote.</p>
           <p style="margin:16px 0 0;color:#94a3b8;font-size:14px;">Quote total: <strong style="color:#ffffff;">${safeTotal}</strong></p>
           ${safeExpiry ? `<p style="margin:4px 0 0;color:#94a3b8;font-size:14px;">Valid through ${safeExpiry}</p>` : ''}
         </td></tr>
         <tr><td align="center" style="padding:28px 32px;">
-          <a href="${safeUrl}" style="display:inline-block;background:#2563eb;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;padding:14px 32px;border-radius:12px;">View your quote</a>
+          <a href="${safeUrl}" style="display:inline-block;background:#2563eb;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;padding:14px 32px;border-radius:12px;">Review your quote</a>
         </td></tr>
         <tr><td style="padding:0 32px 32px;">
           <p style="margin:0;color:#64748b;font-size:13px;line-height:1.6;">Or paste this link into your browser:<br><a href="${safeUrl}" style="color:#60a5fa;word-break:break-all;">${safeUrl}</a></p>
-          <p style="margin:20px 0 0;color:#64748b;font-size:13px;line-height:1.6;">Have questions? Just reply to this email.</p>
+          <p style="margin:20px 0 0;color:#64748b;font-size:13px;line-height:1.6;">Have a question? Send a message from your quote, or simply reply to this email.</p>
         </td></tr>
       </table>
     </td></tr>

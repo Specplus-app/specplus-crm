@@ -5,9 +5,20 @@ import { supabase, Lead, LeadEvent, LeadStatus, LEAD_STATUSES, PartEntry, Quote,
 // receives (copied links, emails).
 export const PUBLIC_QUOTE_ORIGIN = 'https://quotes.specplus.app'
 
+// Approved SpecPlus Vercel preview deployments. Only hostnames ending exactly
+// with this suffix are trusted, not arbitrary *.vercel.app domains.
+const PREVIEW_HOST_SUFFIX = '-spec-plus.vercel.app'
+
 export function customerQuoteUrl(token: string): string {
+  // On a PR preview, customer links must point at that preview so testers can
+  // follow them before the frontend reaches production.
+  if (typeof window !== 'undefined' && window.location.protocol === 'https:' && window.location.hostname.endsWith(PREVIEW_HOST_SUFFIX)) {
+    return `${window.location.origin}/q/${token}`
+  }
   return `${PUBLIC_QUOTE_ORIGIN}/q/${token}`
 }
+
+export const MESSAGE_MAX_LENGTH = 5000
 
 // Staff previews open on the current app origin, where the CRM session exists,
 // so the public RPCs recognize the signed-in shop user and do not count the
@@ -251,6 +262,10 @@ export function describeLeadEvent(event: LeadEvent): string {
       return `Customer approved ${rev}`
     case 'quote_declined':
       return `Customer declined ${rev}`
+    case 'quote_message_added':
+      return m.sender_type === 'customer'
+        ? `Customer sent a message on ${rev}`
+        : `Shop replied on ${rev}`
     default: {
       const text = event.event_type.replace(/_/g, ' ')
       return text.charAt(0).toUpperCase() + text.slice(1)
