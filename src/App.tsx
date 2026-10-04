@@ -12,6 +12,8 @@ import CustomerCustomizer from './pages/CustomerCustomizer'
 import PublicQuotePage from './pages/PublicQuotePage'
 import VehicleEmbed from './pages/VehicleEmbed'
 import BuildSheet from './pages/BuildSheet'
+import CustomerQuotePage from './pages/CustomerQuotePage'
+import QuoteBuilderPage from './pages/QuoteBuilderPage'
 import ProtectedRoute from './components/ProtectedRoute'
 import AppShell from './components/AppShell'
 import { LoadingScreen } from './components/LoadingScreen'
@@ -37,6 +39,7 @@ function AppRoutes() {
       <Route path="/customize/:shopId" element={<CustomerCustomizer />} />
       <Route path="/embed/vehicle/:vehicleId" element={<VehicleEmbed />} />
       <Route path="/build/:id" element={<BuildSheet />} />
+      <Route path="/q/:token" element={<CustomerQuotePage />} />
       <Route path="/:shopSlug" element={<PublicQuotePage />} />
       <Route
         path="/admin"
@@ -61,6 +64,7 @@ function AppRoutes() {
       >
         <Route index element={<ShopDashboard />} />
         <Route path="leads/:leadId" element={<LeadDetailPage />} />
+        <Route path="leads/:leadId/quote" element={<QuoteBuilderPage />} />
         <Route path="vehicles" element={<ShopVehicles />} />
         <Route path="vehicles/:vehicleId" element={<VehicleBuilder />} />
       </Route>

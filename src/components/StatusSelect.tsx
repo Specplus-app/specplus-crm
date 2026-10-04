@@ -1,34 +1,34 @@
-import { LeadStatus } from '../lib/supabase'
+import { LeadStatus, WorkflowStatus, WORKFLOW_STATUSES, getWorkflowMeta, workflowStatusFor } from '../lib/supabase'
 
 type Props = {
+  // Raw leads.status; automatic quote states are shown as their workflow stage.
   status: LeadStatus
-  onChange: (status: LeadStatus) => void
+  // Quoting only applies to custom-upload leads; preconfigured leads already
+  // have instant customer pricing.
+  isCustom: boolean
+  onChange: (status: WorkflowStatus) => void
   size?: 'sm' | 'md'
   disabled?: boolean
 }
 
-const STATUS_OPTIONS: { value: LeadStatus; label: string; dotColor: string }[] = [
-  { value: 'new', label: 'New', dotColor: 'bg-blue-500' },
-  { value: 'contacted', label: 'Contacted', dotColor: 'bg-amber-500' },
-  { value: 'quoted', label: 'Quoted', dotColor: 'bg-purple-500' },
-  { value: 'scheduled', label: 'Scheduled', dotColor: 'bg-cyan-500' },
-  { value: 'completed', label: 'Completed', dotColor: 'bg-emerald-500' },
-  { value: 'archived', label: 'Archived', dotColor: 'bg-zinc-400' },
-]
-
-export default function StatusSelect({ status, onChange, size = 'md', disabled = false }: Props) {
-  const current = STATUS_OPTIONS.find((s) => s.value === status) ?? STATUS_OPTIONS[0]
+export default function StatusSelect({ status, isCustom, onChange, size = 'md', disabled = false }: Props) {
+  const workflow = workflowStatusFor(status)
+  const current = getWorkflowMeta(workflow)
+  // Keep the current stage selectable even if it is unusual for this lead type
+  // (e.g. a legacy preconfigured lead in Quoting), so the select never renders blank.
+  const options = WORKFLOW_STATUSES.filter((s) => isCustom || s.value !== 'quoting' || s.value === workflow)
   const sizeClasses = size === 'sm' ? 'text-xs px-2.5 py-1' : 'text-sm px-3 py-1.5'
 
   return (
     <div className="relative inline-block">
       <select
-        value={status}
+        value={workflow}
         disabled={disabled}
-        onChange={(e) => onChange(e.target.value as LeadStatus)}
+        onChange={(e) => onChange(e.target.value as WorkflowStatus)}
+        aria-label="Workflow status"
         className={`appearance-none rounded-full border border-zinc-300 bg-white font-medium text-zinc-700 pr-8 pl-7 ${sizeClasses} ${disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:border-zinc-400'} focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-all`}
       >
-        {STATUS_OPTIONS.map((s) => (
+        {options.map((s) => (
           <option key={s.value} value={s.value}>{s.label}</option>
         ))}
       </select>

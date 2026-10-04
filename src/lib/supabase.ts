@@ -136,7 +136,158 @@ export type PartGroup = {
   created_at: string
 }
 
-export type LeadStatus = 'new' | 'contacted' | 'quoted' | 'scheduled' | 'completed' | 'archived'
+export type LeadStatus =
+  | 'new'
+  | 'contacted'
+  | 'quoting'
+  | 'quote_sent'
+  | 'viewed'
+  | 'approved'
+  | 'scheduling'
+  | 'scheduled'
+  | 'in_progress'
+  | 'completed'
+  | 'declined'
+  | 'lost'
+  | 'archived'
+
+export type QuoteStatus = 'draft' | 'sent' | 'viewed' | 'approved' | 'declined'
+
+export type QuoteLineItem = {
+  id: string
+  description: string
+  quantity: number
+  unit_price: number
+}
+
+export type Quote = {
+  id: string
+  lead_id: string
+  shop_id: string
+  revision_number: number
+  supersedes_quote_id: string | null
+  superseded_at: string | null
+  public_token: string
+  status: QuoteStatus
+  selected_parts: PartEntry[]
+  custom_line_items: QuoteLineItem[]
+  parts_total: number
+  custom_lines_total: number
+  shipping_total: number
+  discount_amount: number
+  tax_rate: number
+  tax_total: number
+  grand_total: number
+  estimated_lead_time_days: number
+  customer_notes: string | null
+  internal_notes: string | null
+  expires_at: string | null
+  front_image_url: string | null
+  rear_image_url: string | null
+  sent_at: string | null
+  first_viewed_at: string | null
+  last_viewed_at: string | null
+  view_count: number
+  approved_at: string | null
+  declined_at: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+// Customer-safe shape returned by the get_public_quote RPC. Never includes
+// internal notes, ids or customer contact details.
+export type PublicQuote = {
+  revision_number: number
+  status: Exclude<QuoteStatus, 'draft'>
+  is_superseded: boolean
+  is_expired: boolean
+  sent_at: string | null
+  expires_at: string | null
+  approved_at: string | null
+  declined_at: string | null
+  selected_parts: PartEntry[]
+  custom_line_items: QuoteLineItem[]
+  parts_total: number
+  custom_lines_total: number
+  shipping_total: number
+  discount_amount: number
+  tax_rate: number
+  tax_total: number
+  grand_total: number
+  estimated_lead_time_days: number
+  customer_notes: string | null
+  front_image_url: string | null
+  rear_image_url: string | null
+  customer_name: string
+  vehicle: {
+    name: string
+    year: string | null
+    make: string | null
+    model: string | null
+    trim: string | null
+    paint_code: string | null
+    fulfillment_mode: 'local' | 'mail'
+    is_custom: boolean
+  }
+  shop: {
+    name: string
+    logo_url: string | null
+    contact_email: string | null
+    phone: string | null
+  }
+  viewer_is_staff: boolean
+}
+
+export type LeadEventType =
+  | 'lead_created'
+  | 'status_changed'
+  | 'quote_created'
+  | 'quote_revised'
+  | 'quote_sent'
+  | 'quote_viewed'
+  | 'quote_approved'
+  | 'quote_declined'
+  | 'quote_message_added'
+
+export type QuoteMessageSenderType = 'customer' | 'shop_user' | 'admin'
+
+// Internal row, readable by shop staff through RLS.
+export type QuoteMessage = {
+  id: string
+  lead_id: string
+  quote_id: string
+  shop_id: string
+  sender_type: QuoteMessageSenderType
+  sender_id: string | null
+  body: string
+  created_at: string
+}
+
+// Customer-safe shape returned by get_public_quote_messages (no sender/shop ids).
+export type PublicQuoteMessage = {
+  id: string
+  quote_id: string
+  revision_number: number
+  sender_type: QuoteMessageSenderType
+  body: string
+  created_at: string
+}
+
+export type LeadEventActorType = 'customer' | 'shop_user' | 'admin' | 'system'
+
+export type LeadEvent = {
+  id: string
+  lead_id: string
+  shop_id: string
+  quote_id: string | null
+  // Later phases add more event types; unknown ones still render generically.
+  event_type: LeadEventType | (string & {})
+  actor_type: LeadEventActorType
+  actor_id: string | null
+  metadata: Record<string, unknown>
+  created_at: string
+}
 
 export type LeadNote = {
   id: string
@@ -263,14 +414,62 @@ export function svgPathAnchor(d: string): { x: number; y: number } {
   return { x: minX, y: Math.max(0, minY) }
 }
 
-export const LEAD_STATUSES: { value: LeadStatus; label: string; color: string }[] = [
-  { value: 'new', label: 'New', color: 'bg-blue-100 text-blue-700 border-blue-200' },
-  { value: 'contacted', label: 'Contacted', color: 'bg-amber-100 text-amber-700 border-amber-200' },
-  { value: 'quoted', label: 'Quoted', color: 'bg-purple-100 text-purple-700 border-purple-200' },
-  { value: 'scheduled', label: 'Scheduled', color: 'bg-cyan-100 text-cyan-700 border-cyan-200' },
-  { value: 'completed', label: 'Completed', color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
-  { value: 'archived', label: 'Archived', color: 'bg-zinc-100 text-zinc-500 border-zinc-200' },
+export const LEAD_STATUSES: { value: LeadStatus; label: string; color: string; dotColor: string }[] = [
+  { value: 'new', label: 'New', color: 'bg-blue-100 text-blue-700 border-blue-200', dotColor: 'bg-blue-500' },
+  { value: 'contacted', label: 'Contacted', color: 'bg-amber-100 text-amber-700 border-amber-200', dotColor: 'bg-amber-500' },
+  { value: 'quoting', label: 'Quoting', color: 'bg-violet-100 text-violet-700 border-violet-200', dotColor: 'bg-violet-500' },
+  { value: 'quote_sent', label: 'Quote Sent', color: 'bg-purple-100 text-purple-700 border-purple-200', dotColor: 'bg-purple-500' },
+  { value: 'viewed', label: 'Viewed', color: 'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200', dotColor: 'bg-fuchsia-500' },
+  { value: 'approved', label: 'Approved', color: 'bg-emerald-100 text-emerald-700 border-emerald-200', dotColor: 'bg-emerald-500' },
+  { value: 'scheduling', label: 'Scheduling', color: 'bg-sky-100 text-sky-700 border-sky-200', dotColor: 'bg-sky-500' },
+  { value: 'scheduled', label: 'Scheduled', color: 'bg-cyan-100 text-cyan-700 border-cyan-200', dotColor: 'bg-cyan-500' },
+  { value: 'in_progress', label: 'In Progress', color: 'bg-indigo-100 text-indigo-700 border-indigo-200', dotColor: 'bg-indigo-500' },
+  { value: 'completed', label: 'Completed', color: 'bg-green-100 text-green-700 border-green-200', dotColor: 'bg-green-600' },
+  { value: 'declined', label: 'Declined', color: 'bg-red-100 text-red-700 border-red-200', dotColor: 'bg-red-500' },
+  { value: 'lost', label: 'Lost', color: 'bg-rose-100 text-rose-700 border-rose-200', dotColor: 'bg-rose-400' },
+  { value: 'archived', label: 'Archived', color: 'bg-zinc-100 text-zinc-500 border-zinc-200', dotColor: 'bg-zinc-400' },
 ]
+
+// Shop-facing workflow: what the shop is doing. leads.status also stores
+// automatic quote states (quote_sent, viewed, approved, declined); those are
+// shown via the quote badge/card and folded into a workflow stage here.
+export type WorkflowStatus =
+  | 'new'
+  | 'contacted'
+  | 'quoting'
+  | 'scheduling'
+  | 'scheduled'
+  | 'in_progress'
+  | 'completed'
+  | 'lost'
+  | 'archived'
+
+export const WORKFLOW_STATUSES: {
+  value: WorkflowStatus
+  label: string
+  dotColor: string
+  // Raw leads.status values that belong to this workflow stage.
+  // `quoted` is the temporary legacy value still accepted during rollout.
+  rawStatuses: string[]
+}[] = [
+  { value: 'new', label: 'New', dotColor: 'bg-blue-500', rawStatuses: ['new'] },
+  { value: 'contacted', label: 'Contacted', dotColor: 'bg-amber-500', rawStatuses: ['contacted'] },
+  { value: 'quoting', label: 'Quoting', dotColor: 'bg-violet-500', rawStatuses: ['quoting', 'quote_sent', 'viewed', 'declined', 'quoted'] },
+  { value: 'scheduling', label: 'Scheduling', dotColor: 'bg-sky-500', rawStatuses: ['scheduling', 'approved'] },
+  { value: 'scheduled', label: 'Scheduled', dotColor: 'bg-cyan-500', rawStatuses: ['scheduled'] },
+  { value: 'in_progress', label: 'In Progress', dotColor: 'bg-indigo-500', rawStatuses: ['in_progress'] },
+  { value: 'completed', label: 'Completed', dotColor: 'bg-green-600', rawStatuses: ['completed'] },
+  { value: 'lost', label: 'Lost', dotColor: 'bg-rose-400', rawStatuses: ['lost'] },
+  { value: 'archived', label: 'Archived', dotColor: 'bg-zinc-400', rawStatuses: ['archived'] },
+]
+
+export function workflowStatusFor(status: string): WorkflowStatus {
+  return WORKFLOW_STATUSES.find((w) => w.rawStatuses.includes(status))?.value ?? 'new'
+}
+
+export function getWorkflowMeta(status: WorkflowStatus) {
+  return WORKFLOW_STATUSES.find((w) => w.value === status) ?? WORKFLOW_STATUSES[0]
+}
 
 export function getStatusMeta(status: LeadStatus) {
   return LEAD_STATUSES.find((s) => s.value === status) ?? LEAD_STATUSES[0]

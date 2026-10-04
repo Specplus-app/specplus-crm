@@ -12,3 +12,6 @@ verify_jwt = true
 
 [functions.signup-shop]
 verify_jwt = false
+
+[functions.send-quote]
+verify_jwt = true
