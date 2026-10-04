@@ -1,22 +1,17 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
-import { supabase, Lead, LeadStatus, formatCurrency, formatDate } from '../lib/supabase'
+import { supabase, Lead, LeadStatus, LEAD_STATUSES, formatCurrency, formatDate } from '../lib/supabase'
 import StatusSelect from '../components/StatusSelect'
 import { useShopBilling } from '../lib/billing'
 import { LoadingScreen } from '../components/LoadingScreen'
-import { Search, Inbox, TrendingUp, Clock, CheckCircle2, Mail, Phone, MapPin, ChevronRight, Link2, Copy, Check, ExternalLink, PartyPopper, X, type LucideIcon } from 'lucide-react'
+import { Search, Inbox, Send, ThumbsUp, Clock, CheckCircle2, Mail, Phone, MapPin, ChevronRight, Link2, Copy, Check, ExternalLink, PartyPopper, X, type LucideIcon } from 'lucide-react'
 
 const PUBLIC_QUOTE_ORIGIN = 'https://quotes.specplus.app'
 
 const STATUS_FILTERS: { value: LeadStatus | 'all'; label: string }[] = [
   { value: 'all', label: 'All' },
-  { value: 'new', label: 'New' },
-  { value: 'contacted', label: 'Contacted' },
-  { value: 'quoted', label: 'Quoted' },
-  { value: 'scheduled', label: 'Scheduled' },
-  { value: 'completed', label: 'Completed' },
-  { value: 'archived', label: 'Archived' },
+  ...LEAD_STATUSES.map((s) => ({ value: s.value, label: s.label })),
 ]
 
 export default function ShopDashboard() {
@@ -152,7 +147,9 @@ export default function ShopDashboard() {
   const stats = {
     total: leads.length,
     new: leads.filter((l) => l.status === 'new').length,
-    active: leads.filter((l) => ['contacted', 'quoted', 'scheduled'].includes(l.status)).length,
+    // Quotes the customer has received but not yet answered.
+    awaiting: leads.filter((l) => l.status === 'quote_sent' || l.status === 'viewed').length,
+    approved: leads.filter((l) => l.status === 'approved').length,
     completed: leads.filter((l) => l.status === 'completed').length,
   }
 
@@ -222,10 +219,11 @@ export default function ShopDashboard() {
         </div>
 
         {/* Stats cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
           <StatCard icon={Inbox} label="Total Leads" value={stats.total} color="text-slate-300 bg-white/5" />
           <StatCard icon={Clock} label="New" value={stats.new} color="text-blue-300 bg-blue-500/10" />
-          <StatCard icon={TrendingUp} label="Active" value={stats.active} color="text-amber-300 bg-amber-500/10" />
+          <StatCard icon={Send} label="Awaiting Response" value={stats.awaiting} color="text-fuchsia-300 bg-fuchsia-500/10" />
+          <StatCard icon={ThumbsUp} label="Approved" value={stats.approved} color="text-amber-300 bg-amber-500/10" />
           <StatCard icon={CheckCircle2} label="Completed" value={stats.completed} color="text-emerald-300 bg-emerald-500/10" />
         </div>
 

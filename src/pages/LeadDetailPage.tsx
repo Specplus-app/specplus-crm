@@ -5,6 +5,8 @@ import { supabase, Lead, LeadNote, LeadStatus, PartEntry, ShipSize, formatCurren
 import StatusSelect from '../components/StatusSelect'
 import { useShopBilling } from '../lib/billing'
 import ShopCustomPricingModal from '../components/ShopCustomPricingModal'
+import LeadQuoteCard from '../components/LeadQuoteCard'
+import LeadTimeline from '../components/LeadTimeline'
 import { ArrowLeft, Mail, Phone, MapPin, Calendar, DollarSign, Package, Send, User, Clock, Layers, Palette, Image as ImageIcon, PencilRuler, Loader2, Check, AlertCircle, type LucideIcon } from 'lucide-react'
 
 const customUploadUrl = (path: string | null): string | null =>
@@ -473,6 +475,8 @@ export default function LeadDetailPage() {
           </div>
         </div>
 
+        <LeadQuoteCard lead={lead} readOnly={readOnly} />
+
         {/* Customer photos (custom builds) */}
         {lead.is_custom && (customUploadUrl(lead.front_image_url) || customUploadUrl(lead.rear_image_url)) && (
           <div className="bg-white rounded-2xl border border-zinc-200 p-6 mb-4">
@@ -692,6 +696,8 @@ export default function LeadDetailPage() {
             })()}
           </div>
         )}
+
+        <LeadTimeline leadId={lead.id} refreshKey={lead.status} />
 
         {/* Notes section */}
         <div className="bg-white rounded-2xl border border-zinc-200 p-6">
