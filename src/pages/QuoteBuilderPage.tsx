@@ -114,7 +114,7 @@ export default function QuoteBuilderPage() {
   }
 
   const handleCreate = async () => {
-    if (!lead || busy || !quotingAllowed || unpricedLeadParts.length > 0) return
+    if (!lead || busy || !quotingAllowed) return
     setBusy('create')
     setMessage(null)
     const { quote, error } = await createInitialQuote(lead)
@@ -294,13 +294,9 @@ export default function QuoteBuilderPage() {
               <FileText size={36} className="mx-auto text-zinc-300 mb-3" />
               <h1 className="text-lg font-bold text-zinc-900">Customer quote for {lead.customer_name}</h1>
               <p className="text-sm text-zinc-500 mt-1 mb-5">
-                Complete the missing pricing, then review and send the finished quote to the customer.
+                Review the requested areas, adjust the build and pricing, then send the finished quote to the customer.
               </p>
-              {unpricedLeadParts.length > 0 ? (
-                <p className="text-sm text-amber-700">
-                  {unpricedLeadParts.length} {unpricedLeadParts.length === 1 ? 'area still needs' : 'areas still need'} pricing on the lead first: {unpricedLeadParts.map((p) => p.name).join(', ')}.
-                </p>
-              ) : readOnly ? (
+              {readOnly ? (
                 <p className="text-sm text-amber-700">Quotes can't be sent while your account is read-only.</p>
               ) : (
                 <button
@@ -311,6 +307,11 @@ export default function QuoteBuilderPage() {
                   {busy === 'create' ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
                   Review &amp; Send Quote
                 </button>
+              )}
+              {unpricedLeadParts.length > 0 && (
+                <p className="text-sm text-amber-700 mt-3">
+                  {unpricedLeadParts.length} {unpricedLeadParts.length === 1 ? 'area still needs' : 'areas still need'} pricing. In Review &amp; Send Quote you can price these areas, remove them from the quote, or add new build items.
+                </p>
               )}
               {message && <MessageBar message={message} />}
             </div>
