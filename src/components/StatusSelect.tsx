@@ -3,14 +3,20 @@ import { LeadStatus, WorkflowStatus, WORKFLOW_STATUSES, getWorkflowMeta, workflo
 type Props = {
   // Raw leads.status; automatic quote states are shown as their workflow stage.
   status: LeadStatus
+  // Quoting only applies to custom-upload leads; preconfigured leads already
+  // have instant customer pricing.
+  isCustom: boolean
   onChange: (status: WorkflowStatus) => void
   size?: 'sm' | 'md'
   disabled?: boolean
 }
 
-export default function StatusSelect({ status, onChange, size = 'md', disabled = false }: Props) {
+export default function StatusSelect({ status, isCustom, onChange, size = 'md', disabled = false }: Props) {
   const workflow = workflowStatusFor(status)
   const current = getWorkflowMeta(workflow)
+  // Keep the current stage selectable even if it is unusual for this lead type
+  // (e.g. a legacy preconfigured lead in Quoting), so the select never renders blank.
+  const options = WORKFLOW_STATUSES.filter((s) => isCustom || s.value !== 'quoting' || s.value === workflow)
   const sizeClasses = size === 'sm' ? 'text-xs px-2.5 py-1' : 'text-sm px-3 py-1.5'
 
   return (
@@ -22,7 +28,7 @@ export default function StatusSelect({ status, onChange, size = 'md', disabled =
         aria-label="Workflow status"
         className={`appearance-none rounded-full border border-zinc-300 bg-white font-medium text-zinc-700 pr-8 pl-7 ${sizeClasses} ${disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:border-zinc-400'} focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-all`}
       >
-        {WORKFLOW_STATUSES.map((s) => (
+        {options.map((s) => (
           <option key={s.value} value={s.value}>{s.label}</option>
         ))}
       </select>

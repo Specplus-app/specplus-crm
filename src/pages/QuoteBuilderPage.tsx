@@ -8,7 +8,7 @@ import {
 } from '../lib/quotes'
 import QuoteVehiclePhotos from '../components/QuoteVehiclePhotos'
 import {
-  AlertCircle, ArrowLeft, Check, Copy, ExternalLink, FilePlus2, FileText, Loader2, Lock, Plus, RefreshCw, Save, Send, Trash2,
+  AlertCircle, ArrowLeft, Check, Copy, ExternalLink, FileText, Loader2, Lock, Plus, RefreshCw, Save, Send, Trash2,
 } from 'lucide-react'
 
 type DraftForm = {
@@ -77,7 +77,11 @@ export default function QuoteBuilderPage() {
 
   const selected = quotes.find((q) => q.id === selectedId) ?? null
   const latest = quotes[0] ?? null
-  const editable = !!selected && selected.status === 'draft' && !readOnly && !!form
+  // Customer quotes are only part of the custom-upload workflow; preconfigured
+  // leads already have the instant price the customer saw in the customizer.
+  const quotingAllowed = !!lead?.is_custom
+  const unpricedLeadParts = (Array.isArray(lead?.selected_parts) ? lead!.selected_parts : []).filter((p) => !p.priced)
+  const editable = !!selected && selected.status === 'draft' && !readOnly && !!form && quotingAllowed
 
   const totals = useMemo(() => {
     if (form) return calculateQuoteTotals(form)
@@ -108,7 +112,7 @@ export default function QuoteBuilderPage() {
   }
 
   const handleCreate = async () => {
-    if (!lead || busy) return
+    if (!lead || busy || !quotingAllowed || unpricedLeadParts.length > 0) return
     setBusy('create')
     setMessage(null)
     const { quote, error } = await createInitialQuote(lead)
@@ -121,7 +125,7 @@ export default function QuoteBuilderPage() {
   }
 
   const handleRevise = async () => {
-    if (!latest || busy) return
+    if (!latest || busy || !quotingAllowed) return
     setBusy('revise')
     setMessage(null)
     const { quote, error } = await createQuoteRevision(latest)
@@ -180,6 +184,11 @@ export default function QuoteBuilderPage() {
     if (!selected || !form || !lead || busy) return
     if (form.selected_parts.length === 0 && form.custom_line_items.length === 0) {
       setMessage({ type: 'error', text: 'Add at least one item before sending.' })
+      return
+    }
+    const needsPrice = form.selected_parts.filter((p) => !p.priced)
+    if (needsPrice.length > 0) {
+      setMessage({ type: 'error', text: `Set a price for every area before sending: ${needsPrice.map((p) => p.name).join(', ')}.` })
       return
     }
     if (form.expires_at && isQuoteExpired(form.expires_at)) {
@@ -263,26 +272,47 @@ export default function QuoteBuilderPage() {
       <div className="flex-1 overflow-y-auto">
         <div className="p-6 max-w-3xl mx-auto">
           {backButton}
-          <div className="bg-white rounded-2xl border border-zinc-200 p-10 text-center">
-            <FileText size={36} className="mx-auto text-zinc-300 mb-3" />
-            <h1 className="text-lg font-bold text-zinc-900">No quote yet for {lead.customer_name}</h1>
-            <p className="text-sm text-zinc-500 mt-1 mb-5">
-              Start a draft from the customer's {lead.vehicle_name} configuration. Quote pricing never changes the original lead.
-            </p>
-            {readOnly ? (
-              <p className="text-sm text-amber-700">Quotes can't be created while your account is read-only.</p>
-            ) : (
+          {!quotingAllowed ? (
+            <div className="bg-white rounded-2xl border border-zinc-200 p-10 text-center">
+              <FileText size={36} className="mx-auto text-zinc-300 mb-3" />
+              <h1 className="text-lg font-bold text-zinc-900">No separate quote needed</h1>
+              <p className="text-sm text-zinc-500 mt-1 mb-5">
+                This lead already has customer-visible pricing from the vehicle customizer. A separate customer quote is not required.
+              </p>
               <button
-                onClick={handleCreate}
-                disabled={busy !== null}
-                className="inline-flex items-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+                onClick={() => navigate(`/dashboard/leads/${lead.id}`)}
+                className="inline-flex items-center gap-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
               >
-                {busy === 'create' ? <Loader2 size={15} className="animate-spin" /> : <FilePlus2 size={15} />}
-                Create Quote
+                <ArrowLeft size={15} />
+                Back to lead
               </button>
-            )}
-            {message && <MessageBar message={message} />}
-          </div>
+            </div>
+          ) : (
+            <div className="bg-white rounded-2xl border border-zinc-200 p-10 text-center">
+              <FileText size={36} className="mx-auto text-zinc-300 mb-3" />
+              <h1 className="text-lg font-bold text-zinc-900">Customer quote for {lead.customer_name}</h1>
+              <p className="text-sm text-zinc-500 mt-1 mb-5">
+                Complete the missing pricing, then review and send the finished quote to the customer.
+              </p>
+              {unpricedLeadParts.length > 0 ? (
+                <p className="text-sm text-amber-700">
+                  {unpricedLeadParts.length} {unpricedLeadParts.length === 1 ? 'area still needs' : 'areas still need'} pricing on the lead first: {unpricedLeadParts.map((p) => p.name).join(', ')}.
+                </p>
+              ) : readOnly ? (
+                <p className="text-sm text-amber-700">Quotes can't be sent while your account is read-only.</p>
+              ) : (
+                <button
+                  onClick={handleCreate}
+                  disabled={busy !== null}
+                  className="inline-flex items-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+                >
+                  {busy === 'create' ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
+                  Review &amp; Send Quote
+                </button>
+              )}
+              {message && <MessageBar message={message} />}
+            </div>
+          )}
         </div>
       </div>
     )
@@ -337,7 +367,13 @@ export default function QuoteBuilderPage() {
               <span>This quote was sent to the customer, so its terms are locked. {isLatest ? 'Use Revise Quote to prepare updated pricing as a new revision.' : 'A newer revision exists.'}</span>
             </div>
           )}
-          {readOnly && selected.status === 'draft' && (
+          {!quotingAllowed && (
+            <div className="flex items-start gap-2 mt-4 text-xs text-zinc-600 bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2">
+              <Lock size={14} className="text-zinc-400 flex-shrink-0 mt-0.5" />
+              <span>This lead already has customer-visible pricing from the vehicle customizer, so a separate customer quote is not required. Existing quote history is shown read-only.</span>
+            </div>
+          )}
+          {readOnly && quotingAllowed && selected.status === 'draft' && (
             <div className="flex items-start gap-2 mt-4 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
               <Lock size={14} className="flex-shrink-0 mt-0.5" />
               <span>Your account is read-only, so this draft can't be edited or sent.</span>
@@ -370,6 +406,7 @@ export default function QuoteBuilderPage() {
                           {part.type === 'new' ? 'Buy new' : 'Paint customer part'}
                           {part.group_name ? ` · ${part.group_name}` : ''}
                           {part.paint_style_name ? ` · ${part.paint_style_name}` : ''}
+                          {quotingAllowed && !part.priced && <span className="text-amber-600 font-medium"> · Needs price</span>}
                         </p>
                       </div>
                       {editable ? (
@@ -379,7 +416,7 @@ export default function QuoteBuilderPage() {
                             prefix="$"
                             className={inputCls}
                             onChange={(price) => update({
-                              selected_parts: form!.selected_parts.map((p, i) => (i === idx ? { ...p, price } : p)),
+                              selected_parts: form!.selected_parts.map((p, i) => (i === idx ? { ...p, price, priced: true } : p)),
                             })}
                           />
                         </div>
@@ -571,7 +608,7 @@ export default function QuoteBuilderPage() {
                 </div>
               )}
 
-              {!readOnly && isLatest && selected.status !== 'draft' && (
+              {!readOnly && quotingAllowed && isLatest && selected.status !== 'draft' && (
                 <button
                   onClick={handleRevise}
                   disabled={busy !== null}

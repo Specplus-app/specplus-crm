@@ -402,7 +402,7 @@ export default function ShopDashboard() {
                     </div>
                   </div>
                   <div onClick={(e) => e.stopPropagation()}>
-                    <StatusSelect status={lead.status} onChange={(s) => handleStatusChange(lead.id, s)} size="sm" disabled={readOnly} />
+                    <StatusSelect status={lead.status} isCustom={lead.is_custom} onChange={(s) => handleStatusChange(lead.id, s)} size="sm" disabled={readOnly} />
                   </div>
                 </div>
               </div>

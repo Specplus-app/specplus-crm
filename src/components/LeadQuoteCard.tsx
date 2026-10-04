@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase, Lead, Quote, formatCurrency, formatDateTime } from '../lib/supabase'
 import { QUOTE_STATUS_META, createInitialQuote, createQuoteRevision, formatQuoteDate, isQuoteExpired, normalizeQuote, customerQuoteUrl, staffPreviewUrl } from '../lib/quotes'
-import { AlertCircle, Check, Copy, ExternalLink, FilePlus2, FileText, Loader2, Pencil, RefreshCw } from 'lucide-react'
+import { AlertCircle, Check, Copy, ExternalLink, FileText, Loader2, Pencil, RefreshCw, Send } from 'lucide-react'
 
 export default function LeadQuoteCard({ lead, readOnly }: { lead: Lead; readOnly: boolean }) {
   const navigate = useNavigate()
@@ -32,6 +32,9 @@ export default function LeadQuoteCard({ lead, readOnly }: { lead: Lead; readOnly
   }, [lead.id])
 
   const builderPath = `/dashboard/leads/${lead.id}/quote`
+  const parts = Array.isArray(lead.selected_parts) ? lead.selected_parts : []
+  // Custom-build areas the shop has not priced yet (existing lead pricing flow).
+  const unpriced = parts.filter((p) => !p.priced)
 
   const handleCreate = async () => {
     if (busy) return
@@ -77,7 +80,7 @@ export default function LeadQuoteCard({ lead, readOnly }: { lead: Lead; readOnly
       <div className="flex items-center justify-between gap-3 mb-3">
         <h2 className="text-sm font-semibold text-zinc-900 flex items-center gap-2">
           <FileText size={16} className="text-zinc-400" />
-          Quote
+          Customer Quote
         </h2>
         {latest && (
           <div className="flex items-center gap-2">
@@ -92,15 +95,26 @@ export default function LeadQuoteCard({ lead, readOnly }: { lead: Lead; readOnly
       {loading ? (
         <div className="h-10 bg-zinc-100 rounded-lg animate-pulse" />
       ) : !latest ? (
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm text-zinc-500">No quote yet. Create one from this lead's configuration, adjust pricing, and send it to the customer.</p>
-          {!readOnly && (
-            <button onClick={handleCreate} disabled={busy} className={btnPrimary}>
-              {busy ? <Loader2 size={15} className="animate-spin" /> : <FilePlus2 size={15} />}
-              Create Quote
-            </button>
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-zinc-500">Complete the missing pricing, then review and send the finished quote to the customer.</p>
+            {!readOnly && (
+              <button onClick={handleCreate} disabled={busy || unpriced.length > 0} className={btnPrimary}>
+                {busy ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
+                Review &amp; Send Quote
+              </button>
+            )}
+          </div>
+          {unpriced.length > 0 && (
+            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-3">
+              <p className="font-medium">
+                {unpriced.length} of {parts.length} {parts.length === 1 ? 'area still needs' : 'areas still need'} pricing before the quote can be reviewed:
+              </p>
+              <p className="mt-0.5">{unpriced.map((p) => p.name).join(', ')}</p>
+              <p className="mt-0.5 text-amber-600">Use “Set price” on the customer photos or in Build Details above.</p>
+            </div>
           )}
-        </div>
+        </>
       ) : (
         <>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3 text-sm">
@@ -121,7 +135,7 @@ export default function LeadQuoteCard({ lead, readOnly }: { lead: Lead; readOnly
             {latest.status === 'draft' ? (
               <button onClick={() => navigate(builderPath)} className={btnPrimary}>
                 <Pencil size={15} />
-                {readOnly ? 'View Draft' : 'Edit Draft'}
+                {readOnly ? 'View Quote' : 'Continue Quote'}
               </button>
             ) : (
               <>
