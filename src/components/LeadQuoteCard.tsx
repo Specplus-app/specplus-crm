@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase, Lead, Quote, formatCurrency, formatDateTime } from '../lib/supabase'
-import { QUOTE_STATUS_META, createInitialQuote, createQuoteRevision, formatQuoteDate, isQuoteExpired, normalizeQuote, publicQuoteUrl } from '../lib/quotes'
+import { QUOTE_STATUS_META, createInitialQuote, createQuoteRevision, formatQuoteDate, isQuoteExpired, normalizeQuote, customerQuoteUrl, staffPreviewUrl } from '../lib/quotes'
 import { AlertCircle, Check, Copy, ExternalLink, FilePlus2, FileText, Loader2, Pencil, RefreshCw } from 'lucide-react'
 
 export default function LeadQuoteCard({ lead, readOnly }: { lead: Lead; readOnly: boolean }) {
@@ -135,13 +135,13 @@ export default function LeadQuoteCard({ lead, readOnly }: { lead: Lead; readOnly
                     Revise Quote
                   </button>
                 )}
-                <button onClick={() => copyLink(publicQuoteUrl(latest.public_token))} className={btnSecondary}>
+                <button onClick={() => copyLink(customerQuoteUrl(latest.public_token))} className={btnSecondary}>
                   {copied ? <Check size={15} /> : <Copy size={15} />}
                   {copied ? 'Copied' : 'Copy customer link'}
                 </button>
-                <a href={publicQuoteUrl(latest.public_token)} target="_blank" rel="noopener noreferrer" className={btnSecondary}>
+                <a href={staffPreviewUrl(latest.public_token)} target="_blank" rel="noopener noreferrer" className={btnSecondary}>
                   <ExternalLink size={15} />
-                  Open
+                  Preview
                 </a>
               </>
             )}

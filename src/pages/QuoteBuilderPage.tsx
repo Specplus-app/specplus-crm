@@ -4,7 +4,7 @@ import { supabase, Lead, PartEntry, Quote, QuoteLineItem, formatCurrency, format
 import { useShopBilling } from '../lib/billing'
 import {
   QUOTE_STATUS_META, calculateQuoteTotals, createInitialQuote, createQuoteRevision, formatQuoteDate,
-  isQuoteExpired, lineItemTotal, newLineItem, normalizeQuote, publicQuoteUrl,
+  isQuoteExpired, lineItemTotal, newLineItem, normalizeQuote, customerQuoteUrl, staffPreviewUrl,
 } from '../lib/quotes'
 import QuoteVehiclePhotos from '../components/QuoteVehiclePhotos'
 import {
@@ -292,7 +292,8 @@ export default function QuoteBuilderPage() {
   const lineItems = form ? form.custom_line_items : selected.custom_line_items
   const meta = QUOTE_STATUS_META[selected.status]
   const isLatest = latest?.id === selected.id
-  const publicUrl = selected.status !== 'draft' ? publicQuoteUrl(selected.public_token) : null
+  const customerUrl = selected.status !== 'draft' ? customerQuoteUrl(selected.public_token) : null
+  const previewUrl = selected.status !== 'draft' ? staffPreviewUrl(selected.public_token) : null
   const inputCls = 'w-full bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition-colors disabled:opacity-70 disabled:cursor-not-allowed'
 
   return (
@@ -595,22 +596,22 @@ export default function QuoteBuilderPage() {
                   {selected.approved_at && <Row label="Approved" value={formatDateTime(selected.approved_at)} />}
                   {selected.declined_at && <Row label="Declined" value={formatDateTime(selected.declined_at)} />}
                 </div>
-                {publicUrl && (
+                {customerUrl && previewUrl && (
                   <div className="flex gap-2 mt-4">
                     <button
-                      onClick={() => copyLink(publicUrl)}
+                      onClick={() => copyLink(customerUrl)}
                       className="flex-1 flex items-center justify-center gap-1.5 bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-800 text-sm font-medium rounded-lg px-3 py-2 transition-colors"
                     >
                       {copied ? <Check size={14} /> : <Copy size={14} />}
                       {copied ? 'Copied' : 'Copy link'}
                     </button>
                     <a
-                      href={publicUrl}
+                      href={previewUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="flex-1 flex items-center justify-center gap-1.5 bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-800 text-sm font-medium rounded-lg px-3 py-2 transition-colors"
                     >
-                      <ExternalLink size={14} /> Open
+                      <ExternalLink size={14} /> Preview
                     </a>
                   </div>
                 )}

@@ -614,8 +614,60 @@ BEGIN
     'expires_at', q.expires_at,
     'approved_at', q.approved_at,
     'declined_at', q.declined_at,
-    'selected_parts', q.selected_parts,
-    'custom_line_items', q.custom_line_items,
+    -- Parts and line items are rebuilt from an explicit allow-list. Snapshot
+    -- objects can carry internal shop fields (part_cost, paint_price, priced,
+    -- ship_size, lead_time_days, notes, reference_image_path, ...), and any
+    -- key not listed here is never returned.
+    'selected_parts', coalesce((
+      SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
+        'id', p.part -> 'id',
+        'name', p.part -> 'name',
+        'type', p.part -> 'type',
+        'price', p.part -> 'price',
+        'highlight_color', p.part -> 'highlight_color',
+        'paint_style_name', p.part -> 'paint_style_name',
+        'selected_options', (
+          SELECT jsonb_agg(jsonb_build_object(
+            'id', o.opt -> 'id',
+            'name', o.opt -> 'name',
+            'price', o.opt -> 'price'
+          ) ORDER BY o.ord)
+          FROM jsonb_array_elements(
+            CASE WHEN jsonb_typeof(p.part -> 'selected_options') = 'array' THEN p.part -> 'selected_options' ELSE '[]'::jsonb END
+          ) WITH ORDINALITY AS o(opt, ord)
+          WHERE jsonb_typeof(o.opt) = 'object'
+        ),
+        'box', CASE WHEN jsonb_typeof(p.part -> 'box') = 'object' THEN jsonb_build_object(
+          'view', p.part -> 'box' -> 'view',
+          'x', p.part -> 'box' -> 'x',
+          'y', p.part -> 'box' -> 'y',
+          'w', p.part -> 'box' -> 'w',
+          'h', p.part -> 'box' -> 'h',
+          'points', (
+            SELECT jsonb_agg(jsonb_build_object('x', pt.v -> 'x', 'y', pt.v -> 'y') ORDER BY pt.ord)
+            FROM jsonb_array_elements(
+              CASE WHEN jsonb_typeof(p.part -> 'box' -> 'points') = 'array' THEN p.part -> 'box' -> 'points' ELSE '[]'::jsonb END
+            ) WITH ORDINALITY AS pt(v, ord)
+            WHERE jsonb_typeof(pt.v) = 'object'
+          )
+        ) END,
+        'svg_path', p.part -> 'svg_path',
+        'alt_view_svg_path', p.part -> 'alt_view_svg_path',
+        'view', p.part -> 'view'
+      )) ORDER BY p.ord)
+      FROM jsonb_array_elements(q.selected_parts) WITH ORDINALITY AS p(part, ord)
+      WHERE jsonb_typeof(p.part) = 'object'
+    ), '[]'::jsonb),
+    'custom_line_items', coalesce((
+      SELECT jsonb_agg(jsonb_build_object(
+        'id', li.item -> 'id',
+        'description', li.item -> 'description',
+        'quantity', li.item -> 'quantity',
+        'unit_price', li.item -> 'unit_price'
+      ) ORDER BY li.ord)
+      FROM jsonb_array_elements(q.custom_line_items) WITH ORDINALITY AS li(item, ord)
+      WHERE jsonb_typeof(li.item) = 'object'
+    ), '[]'::jsonb),
     'parts_total', q.parts_total,
     'custom_lines_total', q.custom_lines_total,
     'shipping_total', q.shipping_total,

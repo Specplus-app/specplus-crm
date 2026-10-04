@@ -1,11 +1,19 @@
 import { supabase, Lead, LeadEvent, LeadStatus, LEAD_STATUSES, PartEntry, Quote, QuoteLineItem, QuoteStatus } from './supabase'
 
 // Customer quote links always point at the public quotes domain, matching the
-// shop customizer link on the dashboard.
+// shop customizer link on the dashboard. Use this for anything a customer
+// receives (copied links, emails).
 export const PUBLIC_QUOTE_ORIGIN = 'https://quotes.specplus.app'
 
-export function publicQuoteUrl(token: string): string {
+export function customerQuoteUrl(token: string): string {
   return `${PUBLIC_QUOTE_ORIGIN}/q/${token}`
+}
+
+// Staff previews open on the current app origin, where the CRM session exists,
+// so the public RPCs recognize the signed-in shop user and do not count the
+// visit as a customer view.
+export function staffPreviewUrl(token: string): string {
+  return `${window.location.origin}/q/${token}`
 }
 
 export const QUOTE_STATUS_META: Record<QuoteStatus, { label: string; color: string }> = {
