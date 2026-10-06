@@ -133,7 +133,7 @@ export default function PreconfiguredBuildEditor({ lead, readOnly, onSave }: Pro
                 />
                 <select
                   value={part.type}
-                  onChange={(e) => updatePart(part.id, { type: e.target.value as 'new' | 'send', highlight_color: e.target.value === 'new' ? 'blue' : 'green' })}
+                  onChange={(e) => updatePart(part.id, { type: e.target.value as 'new' | 'send' })}
                   className="w-full bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-500"
                   aria-label="Part type"
                 >
@@ -178,7 +178,7 @@ export default function PreconfiguredBuildEditor({ lead, readOnly, onSave }: Pro
                   <option value="">{available.length ? 'Choose a part…' : 'All configured parts are already included'}</option>
                   {available.map((part) => (
                     <option key={part.id} value={part.id}>
-                      {part.name} · {formatCurrency(part.part_cost + part.paint_price)}
+                      {part.name}
                     </option>
                   ))}
                 </select>
