@@ -308,6 +308,17 @@ export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?
     }
   }
 
+  const handleSubmitAnother = () => {
+    setSubmitted(false)
+    setSelectedVehicle(null)
+    setSelectedParts(new Map())
+    setShowCheckout(false)
+    setDetailPart(null)
+    setActiveView('front')
+    setError(null)
+    resetView()
+  }
+
   if (loading) {
     return (
       <div className="dark-surface min-h-screen flex items-center justify-center bg-obsidian-950 bg-radial-spotlight">
@@ -331,6 +342,14 @@ export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?
     return (
       <div className="dark-surface min-h-screen flex items-center justify-center bg-obsidian-950 bg-radial-spotlight text-slate-100 px-4">
         <div className="bg-obsidian-900/60 backdrop-blur-xl border border-white/10 border-t-white/20 rounded-3xl p-10 max-w-md mx-auto text-center shadow-glass-card relative overflow-hidden animate-scale-in">
+          <button
+            type="button"
+            onClick={handleSubmitAnother}
+            aria-label="Close confirmation and submit another request"
+            className="absolute top-4 right-4 z-10 w-9 h-9 rounded-lg flex items-center justify-center text-slate-500 hover:text-white hover:bg-white/10 transition-colors"
+          >
+            <X size={18} />
+          </button>
           <div className="pointer-events-none absolute -top-16 left-1/2 -translate-x-1/2 w-64 h-64 rounded-full bg-emerald-500/10 blur-3xl" />
           <div className="relative">
             <div className="w-16 h-16 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-full flex items-center justify-center mx-auto mb-6 shadow-[0_0_30px_rgba(16,185,129,0.2)] animate-check-pop">
@@ -360,6 +379,14 @@ export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?
                 </div>
               </div>
             </div>
+            <button
+              type="button"
+              onClick={handleSubmitAnother}
+              className="w-full mt-5 bg-metallic-gradient text-white font-semibold text-sm rounded-xl py-3 shadow-glow-blue hover:brightness-110 transition-all flex items-center justify-center gap-2"
+            >
+              Submit another request
+              <ArrowRight size={16} />
+            </button>
           </div>
         </div>
       </div>
