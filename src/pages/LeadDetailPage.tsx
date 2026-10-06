@@ -8,7 +8,8 @@ import ShopCustomPricingModal from '../components/ShopCustomPricingModal'
 import LeadQuoteCard from '../components/LeadQuoteCard'
 import LeadTimeline from '../components/LeadTimeline'
 import LeadQuoteConversation from '../components/LeadQuoteConversation'
-import { ArrowLeft, Mail, Phone, MapPin, Calendar, DollarSign, Package, Send, User, Clock, Layers, Palette, Image as ImageIcon, PencilRuler, type LucideIcon } from 'lucide-react'
+import PreconfiguredBuildEditor from '../components/PreconfiguredBuildEditor'
+import { ArrowLeft, Mail, Phone, MapPin, Calendar, DollarSign, Package, Send, User, Clock, Layers, Palette, Image as ImageIcon, Pencil, PencilRuler, type LucideIcon } from 'lucide-react'
 
 const customUploadUrl = (path: string | null): string | null =>
   path ? supabase.storage.from('customer-uploads').getPublicUrl(path).data.publicUrl : null
@@ -127,6 +128,7 @@ export default function LeadDetailPage() {
   const [enlarged, setEnlarged] = useState<{ url: string; label: string; view: 'front' | 'rear' } | null>(null)
   const [templateImages, setTemplateImages] = useState<{ front: string | null; rear: string | null }>({ front: null, rear: null })
   const [partShapes, setPartShapes] = useState<Map<string, { svg_path: string | null; alt_view_svg_path: string | null; view: 'front' | 'rear' }>>(new Map())
+  const [editingPreconfiguredBuild, setEditingPreconfiguredBuild] = useState(false)
 
   const loadLead = useCallback(async () => {
     if (!leadId) return
@@ -449,7 +451,18 @@ export default function LeadDetailPage() {
         {/* Selected parts */}
         {parts.length > 0 && (
           <div className="bg-white rounded-2xl border border-zinc-200 p-6 mb-4">
-            <h2 className="text-sm font-semibold text-zinc-900 mb-4">Build Details ({parts.length} {parts.length === 1 ? 'part' : 'parts'})</h2>
+            <div className="flex items-center justify-between gap-3 mb-4">
+              <h2 className="text-sm font-semibold text-zinc-900">Build Details ({parts.length} {parts.length === 1 ? 'part' : 'parts'})</h2>
+              {!lead.is_custom && !readOnly && (
+                <button
+                  onClick={() => setEditingPreconfiguredBuild(true)}
+                  className="inline-flex items-center gap-1.5 text-sm font-medium text-brand-600 bg-brand-50 hover:bg-brand-100 rounded-lg px-3 py-1.5 transition-colors"
+                >
+                  <Pencil size={14} />
+                  Edit build
+                </button>
+              )}
+            </div>
             {(() => {
               const groupIsBuyNew = (gid: string | null | undefined) => parts.some((p) => p.group_id === gid && p.type === 'new')
 
@@ -630,6 +643,19 @@ export default function LeadDetailPage() {
           )}
         </div>
       </div>
+
+      {editingPreconfiguredBuild && !lead.is_custom && (
+        <PreconfiguredBuildEditor
+          lead={lead}
+          shipRates={shipRates}
+          leadMultiplier={leadMultiplier}
+          onClose={() => setEditingPreconfiguredBuild(false)}
+          onSaved={(updated) => {
+            setLead(updated)
+            setEditingPreconfiguredBuild(false)
+          }}
+        />
+      )}
 
       {pricingItem && (
         <ShopCustomPricingModal
