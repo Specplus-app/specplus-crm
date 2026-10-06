@@ -9,7 +9,7 @@ import LeadQuoteCard from '../components/LeadQuoteCard'
 import LeadTimeline from '../components/LeadTimeline'
 import LeadQuoteConversation from '../components/LeadQuoteConversation'
 import PreconfiguredBuildEditor from '../components/PreconfiguredBuildEditor'
-import { ArrowLeft, ArrowRight, Mail, Phone, MapPin, Calendar, DollarSign, Package, Send, User, Clock, Layers, Palette, Image as ImageIcon, Pencil, PencilRuler, type LucideIcon } from 'lucide-react'
+import { ArrowLeft, Mail, Phone, MapPin, Calendar, DollarSign, Package, Send, User, Clock, Layers, Palette, Image as ImageIcon, Pencil, PencilRuler, type LucideIcon } from 'lucide-react'
 
 const customUploadUrl = (path: string | null): string | null =>
   path ? supabase.storage.from('customer-uploads').getPublicUrl(path).data.publicUrl : null
@@ -18,14 +18,6 @@ const vehicleImageUrl = (path: string | null): string | null =>
   path ? supabase.storage.from('vehicles').getPublicUrl(path).data.publicUrl : null
 
 const DEFAULT_SHIP_RATES: Record<ShipSize, number> = { small: 0, medium: 0, large: 0, 'x-large': 0 }
-
-const PRECONFIGURED_NEXT_STEP: Partial<Record<LeadStatus, { status: LeadStatus; label: string }>> = {
-  new: { status: 'contacted', label: 'Move to Contacted' },
-  contacted: { status: 'scheduling', label: 'Move to Scheduling' },
-  scheduling: { status: 'scheduled', label: 'Move to Scheduled' },
-  scheduled: { status: 'in_progress', label: 'Start Work' },
-  in_progress: { status: 'completed', label: 'Mark Completed' },
-}
 
 function PhotoOverlays({ boxes, onPick }: { boxes: PartEntry[]; onPick: (p: PartEntry) => void }) {
   return (
@@ -357,15 +349,8 @@ export default function LeadDetailPage() {
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 mt-5 pt-5 border-t border-zinc-100">
-            <a
-              href={`mailto:${lead.customer_email}?subject=${encodeURIComponent(`Your ${lead.vehicle_name} request`)}`}
-              className="flex items-center gap-2 bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-800 text-sm font-medium rounded-lg px-4 py-2 transition-colors"
-            >
-              <Mail size={15} />
-              Email customer
-            </a>
-            {lead.customer_phone && (
+          {lead.customer_phone && (
+            <div className="flex flex-wrap items-center gap-2 mt-5 pt-5 border-t border-zinc-100">
               <a
                 href={`tel:${lead.customer_phone}`}
                 className="flex items-center gap-2 bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-800 text-sm font-medium rounded-lg px-4 py-2 transition-colors"
@@ -373,18 +358,8 @@ export default function LeadDetailPage() {
                 <Phone size={15} />
                 Call {lead.customer_phone}
               </a>
-            )}
-            {!lead.is_custom && PRECONFIGURED_NEXT_STEP[lead.status] && (
-              <button
-                onClick={() => handleStatusChange(PRECONFIGURED_NEXT_STEP[lead.status]!.status)}
-                disabled={readOnly}
-                className="flex items-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
-              >
-                {PRECONFIGURED_NEXT_STEP[lead.status]!.label}
-                <ArrowRight size={15} />
-              </button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         {/* Customer photos (custom builds) */}
