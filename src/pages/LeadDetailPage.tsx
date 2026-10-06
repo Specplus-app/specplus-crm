@@ -8,7 +8,8 @@ import ShopCustomPricingModal from '../components/ShopCustomPricingModal'
 import LeadQuoteCard from '../components/LeadQuoteCard'
 import LeadTimeline from '../components/LeadTimeline'
 import LeadQuoteConversation from '../components/LeadQuoteConversation'
-import { ArrowLeft, Mail, Phone, MapPin, Calendar, DollarSign, Package, Send, User, Clock, Layers, Palette, Image as ImageIcon, PencilRuler, type LucideIcon } from 'lucide-react'
+import PreconfiguredBuildEditor from '../components/PreconfiguredBuildEditor'
+import { ArrowLeft, ArrowRight, Mail, Phone, MapPin, Calendar, DollarSign, Package, Send, User, Clock, Layers, Palette, Image as ImageIcon, Pencil, PencilRuler, type LucideIcon } from 'lucide-react'
 
 const customUploadUrl = (path: string | null): string | null =>
   path ? supabase.storage.from('customer-uploads').getPublicUrl(path).data.publicUrl : null
@@ -17,6 +18,14 @@ const vehicleImageUrl = (path: string | null): string | null =>
   path ? supabase.storage.from('vehicles').getPublicUrl(path).data.publicUrl : null
 
 const DEFAULT_SHIP_RATES: Record<ShipSize, number> = { small: 0, medium: 0, large: 0, 'x-large': 0 }
+
+const PRECONFIGURED_NEXT_STEP: Partial<Record<LeadStatus, { status: LeadStatus; label: string }>> = {
+  new: { status: 'contacted', label: 'Move to Contacted' },
+  contacted: { status: 'scheduling', label: 'Move to Scheduling' },
+  scheduling: { status: 'scheduled', label: 'Move to Scheduled' },
+  scheduled: { status: 'in_progress', label: 'Start Work' },
+  in_progress: { status: 'completed', label: 'Mark Completed' },
+}
 
 function PhotoOverlays({ boxes, onPick }: { boxes: PartEntry[]; onPick: (p: PartEntry) => void }) {
   return (
@@ -127,6 +136,7 @@ export default function LeadDetailPage() {
   const [enlarged, setEnlarged] = useState<{ url: string; label: string; view: 'front' | 'rear' } | null>(null)
   const [templateImages, setTemplateImages] = useState<{ front: string | null; rear: string | null }>({ front: null, rear: null })
   const [partShapes, setPartShapes] = useState<Map<string, { svg_path: string | null; alt_view_svg_path: string | null; view: 'front' | 'rear' }>>(new Map())
+  const [editingPreconfiguredBuild, setEditingPreconfiguredBuild] = useState(false)
 
   const loadLead = useCallback(async () => {
     if (!leadId) return
@@ -347,8 +357,15 @@ export default function LeadDetailPage() {
             )}
           </div>
 
-          {lead.customer_phone && (
-            <div className="flex flex-wrap items-center gap-2 mt-5 pt-5 border-t border-zinc-100">
+          <div className="flex flex-wrap items-center gap-2 mt-5 pt-5 border-t border-zinc-100">
+            <a
+              href={`mailto:${lead.customer_email}?subject=${encodeURIComponent(`Your ${lead.vehicle_name} request`)}`}
+              className="flex items-center gap-2 bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-800 text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+            >
+              <Mail size={15} />
+              Email customer
+            </a>
+            {lead.customer_phone && (
               <a
                 href={`tel:${lead.customer_phone}`}
                 className="flex items-center gap-2 bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-800 text-sm font-medium rounded-lg px-4 py-2 transition-colors"
@@ -356,8 +373,18 @@ export default function LeadDetailPage() {
                 <Phone size={15} />
                 Call {lead.customer_phone}
               </a>
-            </div>
-          )}
+            )}
+            {!lead.is_custom && PRECONFIGURED_NEXT_STEP[lead.status] && (
+              <button
+                onClick={() => handleStatusChange(PRECONFIGURED_NEXT_STEP[lead.status]!.status)}
+                disabled={readOnly}
+                className="flex items-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+              >
+                {PRECONFIGURED_NEXT_STEP[lead.status]!.label}
+                <ArrowRight size={15} />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Customer photos (custom builds) */}
@@ -449,7 +476,18 @@ export default function LeadDetailPage() {
         {/* Selected parts */}
         {parts.length > 0 && (
           <div className="bg-white rounded-2xl border border-zinc-200 p-6 mb-4">
-            <h2 className="text-sm font-semibold text-zinc-900 mb-4">Build Details ({parts.length} {parts.length === 1 ? 'part' : 'parts'})</h2>
+            <div className="flex items-center justify-between gap-3 mb-4">
+              <h2 className="text-sm font-semibold text-zinc-900">Build Details ({parts.length} {parts.length === 1 ? 'part' : 'parts'})</h2>
+              {!lead.is_custom && !readOnly && (
+                <button
+                  onClick={() => setEditingPreconfiguredBuild(true)}
+                  className="inline-flex items-center gap-1.5 text-sm font-medium text-brand-600 bg-brand-50 hover:bg-brand-100 rounded-lg px-3 py-1.5 transition-colors"
+                >
+                  <Pencil size={14} />
+                  Edit build
+                </button>
+              )}
+            </div>
             {(() => {
               const groupIsBuyNew = (gid: string | null | undefined) => parts.some((p) => p.group_id === gid && p.type === 'new')
 
@@ -630,6 +668,19 @@ export default function LeadDetailPage() {
           )}
         </div>
       </div>
+
+      {editingPreconfiguredBuild && !lead.is_custom && (
+        <PreconfiguredBuildEditor
+          lead={lead}
+          shipRates={shipRates}
+          leadMultiplier={leadMultiplier}
+          onClose={() => setEditingPreconfiguredBuild(false)}
+          onSaved={(updated) => {
+            setLead(updated)
+            setEditingPreconfiguredBuild(false)
+          }}
+        />
+      )}
 
       {pricingItem && (
         <ShopCustomPricingModal
