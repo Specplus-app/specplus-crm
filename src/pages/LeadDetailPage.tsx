@@ -1,14 +1,15 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
-import { supabase, Lead, LeadNote, LeadStatus, PartEntry, ShipSize, formatCurrency, formatDate, formatDateTime, getHighlightColor, svgPathAnchor, estimateLeadTimeDays, DEFAULT_LEAD_TIME_MULTIPLIER } from '../lib/supabase'
+import { supabase, Lead, LeadNote, LeadStatus, PartEntry, ShipSize, WorkflowStatus, formatCurrency, formatDate, formatDateTime, getHighlightColor, svgPathAnchor, estimateLeadTimeDays, DEFAULT_LEAD_TIME_MULTIPLIER, shipSizeRank, workflowStatusFor, getWorkflowMeta } from '../lib/supabase'
 import StatusSelect from '../components/StatusSelect'
 import { useShopBilling } from '../lib/billing'
 import ShopCustomPricingModal from '../components/ShopCustomPricingModal'
 import LeadQuoteCard from '../components/LeadQuoteCard'
 import LeadTimeline from '../components/LeadTimeline'
 import LeadQuoteConversation from '../components/LeadQuoteConversation'
-import { ArrowLeft, Mail, Phone, MapPin, Calendar, DollarSign, Package, Send, User, Clock, Layers, Palette, Image as ImageIcon, PencilRuler, type LucideIcon } from 'lucide-react'
+import PreconfiguredBuildEditor from '../components/PreconfiguredBuildEditor'
+import { ArrowLeft, ArrowRight, Mail, Phone, MapPin, Calendar, DollarSign, Package, Send, User, Clock, Layers, Palette, Image as ImageIcon, PencilRuler, type LucideIcon } from 'lucide-react'
 
 const customUploadUrl = (path: string | null): string | null =>
   path ? supabase.storage.from('customer-uploads').getPublicUrl(path).data.publicUrl : null
@@ -237,6 +238,48 @@ export default function LeadDetailPage() {
     setPricingItem(null)
   }
 
+  const handleSavePreconfiguredBuild = async (parts: PartEntry[]): Promise<boolean> => {
+    if (!lead || lead.is_custom) return false
+    const partsTotal = parts.reduce((sum, p) => sum + (Number(p.price) || 0), 0)
+    let shippingTotal = 0
+    if (lead.fulfillment_mode === 'mail') {
+      const groupIds = new Set(parts.filter((p) => p.group_id).map((p) => p.group_id as string))
+      for (const gid of groupIds) {
+        const groupParts = parts.filter((p) => p.group_id === gid)
+        if (groupParts.length === 0) continue
+        const largest = groupParts.reduce((max, p) =>
+          shipSizeRank(p.ship_size ?? 'medium') > shipSizeRank(max.ship_size ?? 'medium') ? p : max
+        , groupParts[0])
+        shippingTotal += shipRates[largest.ship_size ?? 'medium'] ?? 0
+      }
+      for (const p of parts.filter((p) => !p.group_id)) {
+        shippingTotal += shipRates[p.ship_size ?? 'medium'] ?? 0
+      }
+    }
+    const leadTime = estimateLeadTimeDays(parts.map((p) => p.lead_time_days ?? 0), leadMultiplier)
+    const grandTotal = partsTotal + shippingTotal
+    const { error } = await supabase.from('leads').update({
+      selected_parts: parts,
+      parts_total: partsTotal,
+      shipping_total: shippingTotal,
+      grand_total: grandTotal,
+      estimated_lead_time_days: leadTime,
+    }).eq('id', lead.id)
+    if (error) {
+      console.error('Failed to save build changes:', error.message)
+      return false
+    }
+    setLead({
+      ...lead,
+      selected_parts: parts,
+      parts_total: partsTotal,
+      shipping_total: shippingTotal,
+      grand_total: grandTotal,
+      estimated_lead_time_days: leadTime,
+    })
+    return true
+  }
+
   const handleStatusChange = async (status: LeadStatus) => {
     if (!lead) return
     setLead({ ...lead, status })
@@ -301,6 +344,18 @@ export default function LeadDetailPage() {
     return shape?.svg_path ? { ...p, svg_path: shape.svg_path, alt_view_svg_path: shape.alt_view_svg_path, view: shape.view } : p
   })
   const hasTemplatePhotos = !lead.is_custom && (templateImages.front || templateImages.rear)
+  const workflow = workflowStatusFor(lead.status)
+  const nextPreconfiguredStatus: WorkflowStatus | null = !lead.is_custom
+    ? ({
+        new: 'contacted',
+        contacted: 'scheduling',
+        scheduling: 'scheduled',
+        scheduled: 'in_progress',
+        in_progress: 'completed',
+      } as Partial<Record<WorkflowStatus, WorkflowStatus>>)[workflow] ?? null
+    : null
+  const emailSubject = encodeURIComponent(`Regarding your ${lead.vehicle_name} request`)
+  const emailBody = encodeURIComponent(`Hi ${lead.customer_name.split(' ')[0]},\n\n`)
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -347,8 +402,15 @@ export default function LeadDetailPage() {
             )}
           </div>
 
-          {lead.customer_phone && (
-            <div className="flex flex-wrap items-center gap-2 mt-5 pt-5 border-t border-zinc-100">
+          <div className="flex flex-wrap items-center gap-2 mt-5 pt-5 border-t border-zinc-100">
+            <a
+              href={`mailto:${lead.customer_email}?subject=${emailSubject}&body=${emailBody}`}
+              className="flex items-center gap-2 bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-800 text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+            >
+              <Mail size={15} />
+              Email customer
+            </a>
+            {lead.customer_phone && (
               <a
                 href={`tel:${lead.customer_phone}`}
                 className="flex items-center gap-2 bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-800 text-sm font-medium rounded-lg px-4 py-2 transition-colors"
@@ -356,8 +418,19 @@ export default function LeadDetailPage() {
                 <Phone size={15} />
                 Call {lead.customer_phone}
               </a>
-            </div>
-          )}
+            )}
+            {nextPreconfiguredStatus && (
+              <button
+                type="button"
+                onClick={() => handleStatusChange(nextPreconfiguredStatus)}
+                disabled={readOnly}
+                className="flex items-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+              >
+                Next: {getWorkflowMeta(nextPreconfiguredStatus).label}
+                <ArrowRight size={15} />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Customer photos (custom builds) */}
@@ -449,7 +522,12 @@ export default function LeadDetailPage() {
         {/* Selected parts */}
         {parts.length > 0 && (
           <div className="bg-white rounded-2xl border border-zinc-200 p-6 mb-4">
-            <h2 className="text-sm font-semibold text-zinc-900 mb-4">Build Details ({parts.length} {parts.length === 1 ? 'part' : 'parts'})</h2>
+            <div className="flex items-center justify-between gap-3 mb-4">
+              <h2 className="text-sm font-semibold text-zinc-900">Build Details ({parts.length} {parts.length === 1 ? 'part' : 'parts'})</h2>
+              {!lead.is_custom && (
+                <PreconfiguredBuildEditor lead={lead} readOnly={readOnly} onSave={handleSavePreconfiguredBuild} />
+              )}
+            </div>
             {(() => {
               const groupIsBuyNew = (gid: string | null | undefined) => parts.some((p) => p.group_id === gid && p.type === 'new')
 
