@@ -520,7 +520,7 @@ export default function LeadDetailPage() {
         </div>
 
         {/* Selected parts */}
-        {parts.length > 0 && (
+        {(parts.length > 0 || !lead.is_custom) && (
           <div className="bg-white rounded-2xl border border-zinc-200 p-6 mb-4">
             <div className="flex items-center justify-between gap-3 mb-4">
               <h2 className="text-sm font-semibold text-zinc-900">Build Details ({parts.length} {parts.length === 1 ? 'part' : 'parts'})</h2>
