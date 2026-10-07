@@ -21,6 +21,9 @@ type SelectedPart = {
 }
 
 const STORAGE_BUCKET = 'vehicles'
+// Shipping is still calculated and stored on the lead for staff review, but the
+// customer only sees the parts/paint estimate until the shop sends its quote.
+const SHOP_CONFIRMS_CHARGES = 'Applicable shipping and labor confirmed by the shop.'
 const US_STATES = ['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY']
 
 export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?: string } = {}) {
@@ -357,9 +360,9 @@ export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?
             <div className="w-16 h-16 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-full flex items-center justify-center mx-auto mb-6 shadow-[0_0_30px_rgba(16,185,129,0.2)] animate-check-pop">
               <CheckCircle2 size={32} />
             </div>
-            <h1 className="text-2xl font-bold text-white mb-2 tracking-tight">Quote Submitted!</h1>
+            <h1 className="text-2xl font-bold text-white mb-2 tracking-tight">Request Submitted!</h1>
             <p className="text-sm text-slate-400 mb-6 leading-relaxed">
-              Thank you, {customerName.split(' ')[0]}! Your request is on its way to {shop.name}. Keep an eye on your inbox for their pricing.
+              Your request has been submitted. The shop will review your build and confirm any applicable shipping and/or labor charges.
             </p>
             <div className="bg-obsidian-950/60 border border-white/10 rounded-2xl p-4 text-left space-y-3">
               <div className="flex items-center gap-3">
@@ -506,7 +509,7 @@ export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?
               onClick={() => setShowCheckout(true)}
               className="flex items-center gap-2 bg-metallic-gradient text-white text-sm font-semibold rounded-xl px-4 py-2 shadow-glow-blue hover:brightness-110 transition-all"
             >
-              {selectedParts.size} {selectedParts.size === 1 ? 'part' : 'parts'} · {formatCurrency(grandTotal)}
+              {selectedParts.size} {selectedParts.size === 1 ? 'part' : 'parts'} · {formatCurrency(partsTotal)}
               <ArrowRight size={16} />
             </button>
           )}
@@ -903,19 +906,10 @@ export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?
                   })()}
                 </div>
                 <div className="flex items-center justify-between pt-3 mt-3 border-t border-white/10">
-                  <span className="text-sm text-slate-400">Parts Total</span>
-                  <span className="text-sm font-medium text-slate-200">{formatCurrency(partsTotal)}</span>
+                  <span className="text-sm text-slate-400">Parts &amp; Paint Estimate</span>
+                  <span className="text-lg font-bold text-white">{formatCurrency(partsTotal)}</span>
                 </div>
-                {fulfillmentMode === 'mail' && shippingTotal > 0 && (
-                  <div className="flex items-center justify-between pt-2">
-                    <span className="text-sm text-slate-400">Est. Shipping</span>
-                    <span className="text-sm font-medium text-slate-200">{formatCurrency(shippingTotal)}</span>
-                  </div>
-                )}
-                <div className="flex items-center justify-between pt-2 mt-2 border-t border-white/10">
-                  <span className="text-sm text-slate-400">Total</span>
-                  <span className="text-lg font-bold text-white">{formatCurrency(grandTotal)}</span>
-                </div>
+                <p className="text-xs text-slate-500 mt-1.5">{SHOP_CONFIRMS_CHARGES}</p>
                 {leadTimeDays > 0 && (
                   <div className="flex items-center gap-2 mt-3 rounded-lg bg-white/5 border border-white/10 px-3 py-2">
                     <Clock size={15} className="text-cobalt-400 flex-shrink-0" />
@@ -972,8 +966,6 @@ export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?
           shop={shop}
           selectedParts={selectedList}
           partsTotal={partsTotal}
-          shippingTotal={shippingTotal}
-          total={grandTotal}
           leadTimeDays={leadTimeDays}
           customerName={customerName}
           customerEmail={customerEmail}
@@ -1246,7 +1238,7 @@ function PartDetailModal({
 }
 
 function CheckoutModal({
-  shop, selectedParts, partsTotal, shippingTotal, total, leadTimeDays,
+  shop, selectedParts, partsTotal, leadTimeDays,
   customerName, customerEmail, customerPhone, customerState, customerAddress, paintCode, targetStartDate, fulfillmentMode,
   onNameChange, onEmailChange, onPhoneChange, onStateChange, onAddressChange, onTargetStartDateChange, onFulfillmentChange,
   onSubmit, onClose, submitting, error,
@@ -1254,8 +1246,6 @@ function CheckoutModal({
   shop: Shop
   selectedParts: SelectedPart[]
   partsTotal: number
-  shippingTotal: number
-  total: number
   leadTimeDays: number
   customerName: string
   customerEmail: string
@@ -1379,19 +1369,10 @@ function CheckoutModal({
             )
           })()}
           <div className="flex justify-between font-bold pt-2 mt-1 border-t border-white/10">
-            <span className="text-white">Parts Total</span>
+            <span className="text-white">Parts &amp; Paint Estimate</span>
             <span className="text-white">{formatCurrency(partsTotal)}</span>
           </div>
-          {fulfillmentMode === 'mail' && shippingTotal > 0 && (
-            <div className="flex justify-between text-sm pt-2">
-              <span className="text-slate-400">Est. Shipping</span>
-              <span className="text-slate-300">{formatCurrency(shippingTotal)}</span>
-            </div>
-          )}
-          <div className="flex justify-between font-bold pt-2 mt-1 border-t border-white/10">
-            <span className="text-white">Total</span>
-            <span className="text-white">{formatCurrency(total)}</span>
-          </div>
+          <p className="text-xs text-slate-500 pt-1">{SHOP_CONFIRMS_CHARGES}</p>
           {leadTimeDays > 0 && (
             <div className="flex items-center gap-2 pt-2 text-sm">
               <Clock size={14} className="text-cobalt-400 flex-shrink-0" />

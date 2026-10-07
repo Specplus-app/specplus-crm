@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase, Lead, Quote, formatCurrency, formatDateTime } from '../lib/supabase'
-import { QUOTE_STATUS_META, createInitialQuote, createQuoteRevision, formatQuoteDate, isQuoteExpired, normalizeQuote, customerQuoteUrl, staffPreviewUrl } from '../lib/quotes'
+import {
+  QUOTE_STATUS_META, formatQuoteDate, isQuoteExpired, leadBuildDiffersFromQuote, normalizeQuote, openDraftQuote,
+  partsNeedingPrice, customerQuoteUrl, staffPreviewUrl,
+} from '../lib/quotes'
 import { AlertCircle, Check, Copy, ExternalLink, FileText, Loader2, Pencil, RefreshCw, Send } from 'lucide-react'
 
 export default function LeadQuoteCard({ lead, readOnly }: { lead: Lead; readOnly: boolean }) {
@@ -34,33 +37,26 @@ export default function LeadQuoteCard({ lead, readOnly }: { lead: Lead; readOnly
   const builderPath = `/dashboard/leads/${lead.id}/quote`
   const parts = Array.isArray(lead.selected_parts) ? lead.selected_parts : []
   // Custom-build areas the shop has not priced yet (existing lead pricing flow).
-  const unpriced = parts.filter((p) => !p.priced)
+  // Preconfigured parts already carry their configured prices.
+  const unpriced = partsNeedingPrice(parts, lead.is_custom)
+  const buildChanged = !!latest && leadBuildDiffersFromQuote(lead, latest)
 
-  const handleCreate = async () => {
+  // Both actions reuse an open draft if one exists (stale page, second tab),
+  // so repeated clicks never create duplicate drafts.
+  const openDraft = async (revise: boolean) => {
     if (busy) return
     setBusy(true)
     setError(null)
-    const { error: createError } = await createInitialQuote(lead)
+    const { error: openError } = await openDraftQuote(lead, { revise })
     setBusy(false)
-    if (createError) {
-      setError(createError)
+    if (openError) {
+      setError(openError)
       return
     }
     navigate(builderPath)
   }
-
-  const handleRevise = async () => {
-    if (busy || !latest) return
-    setBusy(true)
-    setError(null)
-    const { error: reviseError } = await createQuoteRevision(latest)
-    setBusy(false)
-    if (reviseError) {
-      setError(reviseError)
-      return
-    }
-    navigate(builderPath)
-  }
+  const handleCreate = () => openDraft(false)
+  const handleRevise = () => openDraft(true)
 
   const copyLink = async (url: string) => {
     try {
@@ -97,7 +93,11 @@ export default function LeadQuoteCard({ lead, readOnly }: { lead: Lead; readOnly
       ) : !latest ? (
         <>
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm text-zinc-500">Review the requested areas, adjust the build and pricing, then send the finished quote to the customer.</p>
+            <p className="text-sm text-zinc-500">
+              {lead.is_custom
+                ? 'Review the requested areas, adjust the build and pricing, then send the finished quote to the customer.'
+                : 'Review the configured build and pricing, confirm shipping and any labor, then send the quote to the customer.'}
+            </p>
             {!readOnly && (
               <button onClick={handleCreate} disabled={busy} className={btnPrimary}>
                 {busy ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
@@ -129,6 +129,15 @@ export default function LeadQuoteCard({ lead, readOnly }: { lead: Lead; readOnly
             {latest.approved_at && <Stat label="Approved" value={formatDateTime(latest.approved_at)} />}
             {latest.declined_at && <Stat label="Declined" value={formatDateTime(latest.declined_at)} />}
           </div>
+
+          {buildChanged && (
+            <p className="flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-4">
+              <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
+              {latest.status === 'draft'
+                ? `The build was edited and no longer matches draft Quote #${latest.revision_number}. Open the quote to review the difference before sending.`
+                : `The build was edited after Quote #${latest.revision_number} was sent. The customer's quote has not changed; revise the quote to send the updated terms for approval.`}
+            </p>
+          )}
 
           <div className="flex flex-wrap items-center gap-2 mt-5 pt-5 border-t border-zinc-100">
             {latest.status === 'draft' ? (

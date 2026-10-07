@@ -173,6 +173,7 @@ export default function PreconfiguredBuildEditor({
           <div>
             <h2 className="text-lg font-bold text-zinc-900">Edit Build</h2>
             <p className="text-xs text-zinc-500 mt-0.5">Add, remove, or adjust the parts on this preconfigured submission.</p>
+            <p className="text-xs text-zinc-500 mt-0.5">Saving updates the lead only. Customer quotes are never changed automatically; the Customer Quote section flags any difference.</p>
           </div>
           <button onClick={onClose} disabled={saving} className="text-zinc-400 hover:text-zinc-600 disabled:opacity-40 transition-colors">
             <X size={20} />

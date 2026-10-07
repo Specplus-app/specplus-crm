@@ -5,7 +5,7 @@ import { AlertCircle, Loader2, MessageSquare, Send } from 'lucide-react'
 
 type QuoteRef = { id: string; revision_number: number; status: QuoteStatus; superseded_at: string | null }
 
-// Staff view of the customer quote conversation for a custom lead. Messages
+// Staff view of the customer quote conversation for a lead. Messages
 // stay attached to the revision they were written on; replies always go to the
 // current active sent quote.
 export default function LeadQuoteConversation({ lead, readOnly }: { lead: Lead; readOnly: boolean }) {

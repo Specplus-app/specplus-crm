@@ -593,10 +593,9 @@ export default function LeadDetailPage() {
           </div>
         )}
 
-        {/* Only custom-upload leads need a separate customer quote; preconfigured
-            leads already carry the instant price the customer saw. */}
-        {lead.is_custom && <LeadQuoteCard lead={lead} readOnly={readOnly} />}
-        {lead.is_custom && <LeadQuoteConversation lead={lead} readOnly={readOnly} />}
+        {/* Custom and preconfigured leads share the customer quote workflow. */}
+        <LeadQuoteCard lead={lead} readOnly={readOnly} />
+        <LeadQuoteConversation lead={lead} readOnly={readOnly} />
 
         <LeadTimeline leadId={lead.id} refreshKey={lead.status} />
 

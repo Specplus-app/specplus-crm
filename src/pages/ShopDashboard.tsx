@@ -138,11 +138,10 @@ export default function ShopDashboard() {
       }
     }
 
-    // Quote conversation message counts for custom leads, batched the same way.
+    // Quote conversation message counts, batched the same way.
     const counts = new Map<string, number>()
-    const customIds = rows.filter((l) => l.is_custom).map((l) => l.id)
     const messageBatches: string[][] = []
-    for (let i = 0; i < customIds.length; i += QUOTE_LOOKUP_BATCH) messageBatches.push(customIds.slice(i, i + QUOTE_LOOKUP_BATCH))
+    for (let i = 0; i < ids.length; i += QUOTE_LOOKUP_BATCH) messageBatches.push(ids.slice(i, i + QUOTE_LOOKUP_BATCH))
     const messageResults = await Promise.all(messageBatches.map((batch) =>
       supabase.from('quote_messages').select('lead_id').in('lead_id', batch)
     ))

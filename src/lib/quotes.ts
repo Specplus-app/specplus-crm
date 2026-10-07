@@ -1,4 +1,5 @@
 import { supabase, Lead, LeadEvent, LeadStatus, LEAD_STATUSES, PartEntry, Quote, QuoteLineItem, QuoteStatus } from './supabase'
+import { ensureDraftQuote, initialQuoteValues, type EnsureDraftResult } from './quoteRules'
 
 // Customer quote links always point at the public quotes domain, matching the
 // shop customizer link on the dashboard. Use this for anything a customer
@@ -35,47 +36,13 @@ export const QUOTE_STATUS_META: Record<QuoteStatus, { label: string; color: stri
   declined: { label: 'Declined', color: 'bg-red-100 text-red-700 border-red-200' },
 }
 
-// ---------------------------------------------------------------------------
-// Pricing. Mirrors the database calculation in quotes_before_write(), which is
-// authoritative; this copy only drives the live totals in the editor.
-// ---------------------------------------------------------------------------
-
-export const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100
-
-const nonNegative = (n: unknown): number =>
-  typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : 0
-
-export function lineItemTotal(item: Pick<QuoteLineItem, 'quantity' | 'unit_price'>): number {
-  return round2(nonNegative(item.quantity) * nonNegative(item.unit_price))
-}
-
-export type QuoteTotals = {
-  parts_total: number
-  custom_lines_total: number
-  discount_amount: number
-  taxable_subtotal: number
-  tax_total: number
-  shipping_total: number
-  grand_total: number
-}
-
-export function calculateQuoteTotals(input: {
-  selected_parts: PartEntry[]
-  custom_line_items: QuoteLineItem[]
-  discount_amount: number
-  tax_rate: number
-  shipping_total: number
-}): QuoteTotals {
-  const parts_total = round2(input.selected_parts.reduce((sum, p) => sum + nonNegative(p.price), 0))
-  const custom_lines_total = round2(input.custom_line_items.reduce((sum, item) => sum + lineItemTotal(item), 0))
-  const discount_amount = round2(nonNegative(input.discount_amount))
-  const shipping_total = round2(nonNegative(input.shipping_total))
-  const taxRate = Math.min(100, nonNegative(input.tax_rate))
-  const taxable_subtotal = Math.max(0, round2(parts_total + custom_lines_total - discount_amount))
-  const tax_total = round2((taxable_subtotal * taxRate) / 100)
-  const grand_total = round2(taxable_subtotal + tax_total + shipping_total)
-  return { parts_total, custom_lines_total, discount_amount, taxable_subtotal, tax_total, shipping_total, grand_total }
-}
+// Pricing, pricing completeness and draft rules live in quoteRules (pure, unit
+// tested) and are re-exported here for existing imports.
+export {
+  round2, lineItemTotal, calculateQuoteTotals, partNeedsPrice, partsNeedingPrice,
+  initialQuoteValues, leadBuildDiffersFromQuote,
+} from './quoteRules'
+export type { QuoteTotals } from './quoteRules'
 
 // Expiration is a calendar date that remains valid through the end of that day
 // (UTC, matching the database's current_date check).
@@ -130,8 +97,8 @@ const vehicleImageUrl = (path: string | null): string | null =>
 // Builds the visual snapshot for a quote the same way the build sheet does:
 // custom builds use the customer's uploaded photos (box/polygon data is kept on
 // each part), template vehicles use the vehicle images plus each selected
-// part's current highlight shape.
-async function leadVisualSnapshot(lead: Lead): Promise<{
+// part's current highlight shape. Part prices always come from the lead.
+export async function leadVisualSnapshot(lead: Lead): Promise<{
   selected_parts: PartEntry[]
   front_image_url: string | null
   rear_image_url: string | null
@@ -167,16 +134,17 @@ type CreateResult = { quote: Quote | null; error: string | null }
 // never modified by quote pricing.
 export async function createInitialQuote(lead: Lead): Promise<CreateResult> {
   const visual = await leadVisualSnapshot(lead)
+  const initial = initialQuoteValues(lead)
   const { data, error } = await supabase
     .from('quotes')
     .insert({
       lead_id: lead.id,
       selected_parts: visual.selected_parts,
       custom_line_items: [],
-      shipping_total: Math.max(0, Number(lead.shipping_total) || 0),
+      shipping_total: initial.shipping_total,
       discount_amount: 0,
       tax_rate: 0,
-      estimated_lead_time_days: Math.max(0, Math.round(Number(lead.estimated_lead_time_days) || 0)),
+      estimated_lead_time_days: initial.estimated_lead_time_days,
       front_image_url: visual.front_image_url,
       rear_image_url: visual.rear_image_url,
     })
@@ -210,6 +178,19 @@ export async function createQuoteRevision(previous: Quote): Promise<CreateResult
     .single()
   if (error) return { quote: null, error: error.message }
   return { quote: data as Quote, error: null }
+}
+
+// Opens the lead's draft quote, reusing an existing one rather than creating a
+// duplicate. `revise` creates a new revision when the latest quote was sent.
+export async function openDraftQuote(lead: Lead, options: { revise: boolean }): Promise<EnsureDraftResult> {
+  return ensureDraftQuote({
+    listQuotes: async () => {
+      const { data, error } = await supabase.from('quotes').select('*').eq('lead_id', lead.id)
+      return { quotes: ((data ?? []) as Quote[]).map(normalizeQuote), error: error?.message ?? null }
+    },
+    createInitial: () => createInitialQuote(lead),
+    createRevision: (previous) => createQuoteRevision(previous),
+  }, options)
 }
 
 // Numeric columns can arrive from PostgREST as strings; normalize once.
