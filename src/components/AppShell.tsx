@@ -3,7 +3,7 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { supabase } from '../lib/supabase'
 import { ShopBillingProvider, computeBilling, DEFAULT_BILLING, type ShopBillingState } from '../lib/billing'
-import { LogOut, LayoutDashboard, Users, Shield, Car, Menu, X, AlertTriangle, Clock } from 'lucide-react'
+import { LogOut, LayoutDashboard, Users, Shield, Car, Menu, X, AlertTriangle, Clock, CalendarDays } from 'lucide-react'
 
 export default function AppShell() {
   const { profile, signOut } = useAuth()
@@ -45,6 +45,7 @@ export default function AppShell() {
       ]
     : [
         { label: 'Leads', path: '/dashboard', icon: LayoutDashboard },
+        { label: 'Schedule', path: '/dashboard/schedule', icon: CalendarDays },
         { label: 'Vehicles', path: '/dashboard/vehicles', icon: Car },
       ]
 

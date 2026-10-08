@@ -6,7 +6,8 @@ import { QUOTE_STATUS_META } from '../lib/quotes'
 import StatusSelect from '../components/StatusSelect'
 import { useShopBilling } from '../lib/billing'
 import { LoadingScreen } from '../components/LoadingScreen'
-import { Search, Inbox, Send, ThumbsUp, Clock, CheckCircle2, Mail, Phone, MapPin, ChevronRight, ChevronDown, MessageSquare, Link2, Copy, Check, ExternalLink, PartyPopper, X, type LucideIcon } from 'lucide-react'
+import { formatDateOnly } from '../lib/scheduleDates'
+import { Search, Inbox, Send, ThumbsUp, Clock, CheckCircle2, Mail, Phone, MapPin, ChevronRight, ChevronDown, MessageSquare, Link2, Copy, Check, ExternalLink, PartyPopper, X, CalendarDays, type LucideIcon } from 'lucide-react'
 
 const PUBLIC_QUOTE_ORIGIN = 'https://quotes.specplus.app'
 
@@ -41,6 +42,8 @@ export default function ShopDashboard() {
   const [moreOpen, setMoreOpen] = useState(false)
   const [latestQuotes, setLatestQuotes] = useState<Map<string, QuoteStatus>>(new Map())
   const [messageCounts, setMessageCounts] = useState<Map<string, number>>(new Map())
+  const [bookedStarts, setBookedStarts] = useState<Map<string, string>>(new Map())
+  const [statusError, setStatusError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [copied, setCopied] = useState(false)
   const [shopSlug, setShopSlug] = useState<string | null>(null)
@@ -155,9 +158,23 @@ export default function ShopDashboard() {
       }
     }
 
+    // Confirmed production dates, batched the same way.
+    const bookings = new Map<string, string>()
+    const bookingResults = await Promise.all(messageBatches.map((batch) =>
+      supabase.from('schedule_reservations').select('lead_id, start_date').eq('status', 'active').in('lead_id', batch)
+    ))
+    for (const { data: bookingRows, error: bookingError } of bookingResults) {
+      if (bookingError) {
+        console.error('Failed to load schedules:', bookingError.message)
+        continue
+      }
+      for (const b of (bookingRows ?? []) as { lead_id: string; start_date: string }[]) bookings.set(b.lead_id, b.start_date)
+    }
+
     setLeads(rows)
     setLatestQuotes(latest)
     setMessageCounts(counts)
+    setBookedStarts(bookings)
     setLoading(false)
   }, [profile?.shop_id, statusFilter])
 
@@ -166,10 +183,18 @@ export default function ShopDashboard() {
   }, [loadLeads])
 
   const handleStatusChange = async (leadId: string, status: LeadStatus) => {
+    setStatusError(null)
+    // Scheduled is only reached by confirming a customer-requested date, so
+    // open that flow on the lead instead of changing the status here.
+    if (status === 'scheduled') {
+      navigate(`/dashboard/leads/${leadId}`, { state: { openSchedule: true } })
+      return
+    }
     setLeads((prev) => prev.map((l) => l.id === leadId ? { ...l, status } : l))
     const { error } = await supabase.from('leads').update({ status }).eq('id', leadId)
     if (error) {
       console.error('Failed to update status:', error.message)
+      setStatusError(error.message)
       loadLeads()
     }
   }
@@ -379,6 +404,12 @@ export default function ShopDashboard() {
           </div>
         ) : (
           <div className="space-y-2">
+            {statusError && (
+              <div className="flex items-start justify-between gap-2 text-sm text-red-200 bg-red-500/10 border border-red-500/30 rounded-xl px-3 py-2">
+                <span>{statusError}</span>
+                <button onClick={() => setStatusError(null)} aria-label="Dismiss" className="text-red-300 hover:text-red-100"><X size={14} /></button>
+              </div>
+            )}
             {filtered.map((lead) => (
               <div
                 key={lead.id}
@@ -399,6 +430,16 @@ export default function ShopDashboard() {
                         <span className="flex items-center gap-1 text-[11px] font-medium border rounded-md px-1.5 py-0.5 whitespace-nowrap flex-shrink-0 text-sky-200 bg-sky-500/10 border-sky-500/30">
                           <MessageSquare size={11} />
                           {messageCounts.get(lead.id)} {messageCounts.get(lead.id) === 1 ? 'message' : 'messages'}
+                        </span>
+                      )}
+                      {bookedStarts.has(lead.id) ? (
+                        <span className="flex items-center gap-1 text-[11px] font-medium border rounded-md px-1.5 py-0.5 whitespace-nowrap flex-shrink-0 text-cyan-200 bg-cyan-500/10 border-cyan-500/30">
+                          <CalendarDays size={11} />
+                          Starts {formatDateOnly(bookedStarts.get(lead.id)!, { month: 'short', day: 'numeric' })}
+                        </span>
+                      ) : lead.status === 'scheduled' && (
+                        <span className="text-[11px] font-medium border rounded-md px-1.5 py-0.5 whitespace-nowrap flex-shrink-0 text-amber-200 bg-amber-500/10 border-amber-500/30">
+                          Schedule missing
                         </span>
                       )}
                     </div>

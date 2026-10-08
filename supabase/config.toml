@@ -15,3 +15,6 @@ verify_jwt = false
 
 [functions.send-quote]
 verify_jwt = true
+
+[functions.send-schedule-options]
+verify_jwt = true

@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import { supabase, PublicQuote, PublicQuoteMessage, PartEntry, formatCurrency, formatDateTime, getHighlightColor } from '../lib/supabase'
 import { MESSAGE_MAX_LENGTH, formatQuoteDate, lineItemTotal, quoteViewSessionId } from '../lib/quotes'
 import QuoteVehiclePhotos from '../components/QuoteVehiclePhotos'
+import CustomerSchedule from '../components/CustomerSchedule'
 import { AlertCircle, CheckCircle2, Clock, Eye, FileText, Loader2, MessageSquare, Package, Palette, Phone, RefreshCw, Send, XCircle } from 'lucide-react'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -287,6 +288,11 @@ export default function CustomerQuotePage() {
             <h2 className="text-sm font-semibold text-white mb-2">Notes from {quote.shop.name}</h2>
             <p className="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">{quote.customer_notes}</p>
           </div>
+        )}
+
+        {/* Production date: offered options (approved quote only) or a confirmed booking. */}
+        {!quote.is_superseded && (
+          <CustomerSchedule token={token!} shopName={quote.shop.name} staffPreview={quote.viewer_is_staff} />
         )}
 
         {/* Conversation */}

@@ -249,6 +249,11 @@ export type LeadEventType =
   | 'quote_approved'
   | 'quote_declined'
   | 'quote_message_added'
+  | 'schedule_options_sent'
+  | 'schedule_date_requested'
+  | 'schedule_confirmed'
+  | 'schedule_cancelled'
+  | 'schedule_options_invalidated'
 
 export type QuoteMessageSenderType = 'customer' | 'shop_user' | 'admin'
 

@@ -14,6 +14,7 @@ import VehicleEmbed from './pages/VehicleEmbed'
 import BuildSheet from './pages/BuildSheet'
 import CustomerQuotePage from './pages/CustomerQuotePage'
 import QuoteBuilderPage from './pages/QuoteBuilderPage'
+import SchedulePage from './pages/SchedulePage'
 import ProtectedRoute from './components/ProtectedRoute'
 import AppShell from './components/AppShell'
 import { LoadingScreen } from './components/LoadingScreen'
@@ -65,6 +66,7 @@ function AppRoutes() {
         <Route index element={<ShopDashboard />} />
         <Route path="leads/:leadId" element={<LeadDetailPage />} />
         <Route path="leads/:leadId/quote" element={<QuoteBuilderPage />} />
+        <Route path="schedule" element={<SchedulePage />} />
         <Route path="vehicles" element={<ShopVehicles />} />
         <Route path="vehicles/:vehicleId" element={<VehicleBuilder />} />
       </Route>

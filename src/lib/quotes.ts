@@ -1,5 +1,6 @@
 import { supabase, Lead, LeadEvent, LeadStatus, LEAD_STATUSES, PartEntry, Quote, QuoteLineItem, QuoteStatus } from './supabase'
 import { ensureDraftQuote, initialQuoteValues, type EnsureDraftResult } from './quoteRules'
+import { formatDateOnly, isDateOnly } from './scheduleDates'
 
 // Customer quote links always point at the public quotes domain, matching the
 // shop customizer link on the dashboard. Use this for anything a customer
@@ -214,6 +215,8 @@ export function normalizeQuote(row: Quote): Quote {
 // Audit timeline
 // ---------------------------------------------------------------------------
 
+const eventDate = (value: unknown): string => (isDateOnly(value) ? formatDateOnly(value, { month: 'short', day: 'numeric', year: 'numeric' }) : '—')
+
 function statusLabel(value: unknown): string {
   if (typeof value !== 'string') return 'Unknown'
   return LEAD_STATUSES.find((s) => s.value === (value as LeadStatus))?.label ?? value
@@ -247,6 +250,20 @@ export function describeLeadEvent(event: LeadEvent): string {
       return m.sender_type === 'customer'
         ? `Customer sent a message on ${rev}`
         : `Shop replied on ${rev}`
+    case 'schedule_options_sent': {
+      const dates = Array.isArray(m.start_dates) ? m.start_dates.filter(isDateOnly).map((d) => formatDateOnly(d, { month: 'short', day: 'numeric' })) : []
+      return `${m.reschedule ? 'New production dates' : 'Production dates'} offered${dates.length ? `: ${dates.join(', ')}` : ''}`
+    }
+    case 'schedule_date_requested':
+      return `Customer requested a production start of ${eventDate(m.start_date)}${m.changed_choice ? ' (changed choice)' : ''}`
+    case 'schedule_confirmed':
+      return m.rescheduled
+        ? `Schedule moved from ${eventDate(m.previous_start_date)}–${eventDate(m.previous_estimated_ready_date)} to ${eventDate(m.start_date)}–${eventDate(m.estimated_ready_date)}`
+        : `Schedule confirmed: start ${eventDate(m.start_date)}, ready ${eventDate(m.estimated_ready_date)}`
+    case 'schedule_cancelled':
+      return `Schedule cancelled (was ${eventDate(m.start_date)}–${eventDate(m.estimated_ready_date)})`
+    case 'schedule_options_invalidated':
+      return `${rev} replaced outstanding date options; fresh dates are needed after approval`
     default: {
       const text = event.event_type.replace(/_/g, ' ')
       return text.charAt(0).toUpperCase() + text.slice(1)

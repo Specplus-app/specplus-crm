@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { supabase, Lead, LeadNote, LeadStatus, PartEntry, ShipSize, formatCurrency, formatDate, formatDateTime, getHighlightColor, svgPathAnchor, estimateLeadTimeDays, DEFAULT_LEAD_TIME_MULTIPLIER } from '../lib/supabase'
 import StatusSelect from '../components/StatusSelect'
@@ -8,6 +8,7 @@ import ShopCustomPricingModal from '../components/ShopCustomPricingModal'
 import LeadQuoteCard from '../components/LeadQuoteCard'
 import LeadTimeline from '../components/LeadTimeline'
 import LeadQuoteConversation from '../components/LeadQuoteConversation'
+import LeadSchedulePanel from '../components/LeadSchedulePanel'
 import PreconfiguredBuildEditor from '../components/PreconfiguredBuildEditor'
 import { ArrowLeft, Mail, Phone, MapPin, Calendar, DollarSign, Package, Send, User, Clock, Layers, Palette, Image as ImageIcon, Pencil, PencilRuler, type LucideIcon } from 'lucide-react'
 
@@ -116,6 +117,18 @@ export default function LeadDetailPage() {
   const { profile } = useAuth()
   const { readOnly } = useShopBilling()
   const navigate = useNavigate()
+  const location = useLocation()
+  const [scheduleIntent, setScheduleIntent] = useState(0)
+  const [statusError, setStatusError] = useState<string | null>(null)
+  const [timelineKey, setTimelineKey] = useState(0)
+
+  // The dashboard's status dropdown sends "Scheduled" here to start the flow.
+  useEffect(() => {
+    if ((location.state as { openSchedule?: boolean } | null)?.openSchedule) {
+      setScheduleIntent((n) => n + 1)
+      navigate(location.pathname, { replace: true })
+    }
+  }, [location.state, location.pathname, navigate])
   const [lead, setLead] = useState<Lead | null>(null)
   const [notes, setNotes] = useState<LeadNote[]>([])
   const [newNote, setNewNote] = useState('')
@@ -241,10 +254,17 @@ export default function LeadDetailPage() {
 
   const handleStatusChange = async (status: LeadStatus) => {
     if (!lead) return
+    setStatusError(null)
+    // Scheduled is only reached by confirming a customer-requested date.
+    if (status === 'scheduled') {
+      setScheduleIntent((n) => n + 1)
+      return
+    }
     setLead({ ...lead, status })
     const { error } = await supabase.from('leads').update({ status }).eq('id', lead.id)
     if (error) {
       console.error('Failed to update status:', error.message)
+      setStatusError(error.message)
       loadLead()
     }
   }
@@ -332,6 +352,7 @@ export default function LeadDetailPage() {
             <div className="flex flex-col items-end gap-1 flex-shrink-0">
               <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">Workflow</span>
               <StatusSelect status={lead.status} isCustom={lead.is_custom} onChange={handleStatusChange} disabled={readOnly} />
+              {statusError && <p className="text-xs text-red-600 max-w-[16rem] text-right">{statusError}</p>}
             </div>
           </div>
 
@@ -596,8 +617,18 @@ export default function LeadDetailPage() {
         {/* Custom and preconfigured leads share the customer quote workflow. */}
         <LeadQuoteCard lead={lead} readOnly={readOnly} />
         <LeadQuoteConversation lead={lead} readOnly={readOnly} />
+        <LeadSchedulePanel
+          lead={lead}
+          readOnly={readOnly}
+          intent={scheduleIntent}
+          onChanged={() => {
+            setStatusError(null)
+            setTimelineKey((n) => n + 1)
+            loadLead()
+          }}
+        />
 
-        <LeadTimeline leadId={lead.id} refreshKey={lead.status} />
+        <LeadTimeline leadId={lead.id} refreshKey={`${lead.status}:${timelineKey}`} />
 
         {/* Notes section */}
         <div className="bg-white rounded-2xl border border-zinc-200 p-6">

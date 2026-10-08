@@ -2,14 +2,13 @@
 // Behaviour is driven by globalThis.__supabaseMock, set by each test.
 function query(table, state) {
   const filters = {}
+  const matching = () => (state.tables[table] ?? []).filter((r) => Object.entries(filters).every(([k, v]) => r[k] === v))
   const builder = {
     select: () => builder,
     eq: (column, value) => { filters[column] = value; return builder },
-    maybeSingle: async () => {
-      const rows = state.tables[table] ?? []
-      const row = rows.find((r) => Object.entries(filters).every(([k, v]) => r[k] === v)) ?? null
-      return { data: row, error: null }
-    },
+    maybeSingle: async () => ({ data: matching()[0] ?? null, error: null }),
+    // Awaiting the builder itself returns every matching row.
+    then: (resolve, reject) => Promise.resolve({ data: matching(), error: null }).then(resolve, reject),
   }
   return builder
 }
