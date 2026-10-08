@@ -255,6 +255,93 @@ test('a failed confirmation rolls back completely', async () => {
   assert.equal((await confirm(leadId, 'userA', D(7))).ok, true)
 })
 
+// Simulates time passing: moves a lead's offered/requested dates into the
+// past directly, bypassing triggers the way stored data simply ages.
+async function ageDates(leadId: string, startDate: string) {
+  await db.exec(`SET session_replication_role = replica`)
+  try {
+    await db.query(`UPDATE schedule_offer_options SET start_date = $2 WHERE lead_id = $1`, [leadId, startDate])
+    await db.query(`UPDATE schedule_requests SET start_date = $2 WHERE lead_id = $1`, [leadId, startDate])
+  } finally {
+    await db.exec(`SET session_replication_role = origin`)
+  }
+}
+
+async function snapshot(leadId: string) {
+  return {
+    status: await leadStatus(leadId),
+    version: await version(leadId),
+    events: (await events(leadId)).length,
+    reservations: (await db.query(`SELECT id, status FROM schedule_reservations WHERE lead_id = $1 ORDER BY id`, [leadId])).rows,
+    requests: (await db.query(`SELECT id, status FROM schedule_requests WHERE lead_id = $1 ORDER BY id`, [leadId])).rows,
+    offers: (await db.query(`SELECT id, status FROM schedule_offers WHERE lead_id = $1 ORDER BY id`, [leadId])).rows,
+  }
+}
+
+test('a requested start date that has since passed cannot be confirmed', async () => {
+  const { leadId, quote } = await approvedLead(false)
+  await offerDates(leadId, 'userA', [D(5)])
+  await requestDate(quote.public_token, (await publicSchedule(quote.public_token)).offer.options[0].id)
+  await ageDates(leadId, D(-7))
+  const before = await snapshot(leadId)
+  await assert.rejects(confirm(leadId, 'userA', D(1)), /start date has passed\. Offer fresh dates/)
+  assert.deepEqual(await snapshot(leadId), before, 'no booking, request, status, version or history change')
+
+  // Same tolerance as offering/requesting: yesterday (UTC) is still open.
+  await ageDates(leadId, D(-1))
+  assert.equal((await confirm(leadId, 'userA', D(2))).ok, true)
+})
+
+test('expired draft options cannot be sent, and a rescheduled booking is kept', async () => {
+  const { leadId, quote } = await approvedLead(true)
+  await offerDates(leadId, 'userA', [D(5)])
+  await requestDate(quote.public_token, (await publicSchedule(quote.public_token)).offer.options[0].id)
+  await confirm(leadId, 'userA', D(8))
+  const booked = await activeReservation(leadId)
+
+  const draft = await createOffer(leadId, 'userA', [D(3), D(20)])
+  await db.exec(`SET session_replication_role = replica`)
+  await db.query(`UPDATE schedule_offer_options SET start_date = $2 WHERE offer_id = $1 AND start_date = $3`, [draft.offer_id, D(-4), D(3)])
+  await db.exec(`SET session_replication_role = origin`)
+  const before = await snapshot(leadId)
+  await assert.rejects(markSent(draft.offer_id, 'userA'), /dates have passed\. Offer fresh dates/)
+  assert.deepEqual(await snapshot(leadId), before)
+  assert.equal((await activeReservation(leadId)).id, booked.id)
+  // A customer can't pick a passed date either.
+  const stale = await approvedLead(false)
+  await offerDates(stale.leadId, 'userA', [D(5)])
+  const option = (await publicSchedule(stale.quote.public_token)).offer.options[0]
+  await ageDates(stale.leadId, D(-3))
+  assert.equal((await requestDate(stale.quote.public_token, option.id)).error, 'date_passed')
+})
+
+test('a late failure during confirmation rolls back the booking and status writes', async () => {
+  const { leadId, quote } = await approvedLead(false)
+  await offerDates(leadId, 'userA', [D(5)])
+  await requestDate(quote.public_token, (await publicSchedule(quote.public_token)).offer.options[0].id)
+  const before = await snapshot(leadId)
+
+  // Fail the audit insert, which runs after the reservation insert, the
+  // request/offer updates and the lead status change.
+  await db.exec(`
+    CREATE FUNCTION public.test_fail_schedule_audit() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+      IF NEW.event_type = 'schedule_confirmed' THEN RAISE EXCEPTION 'simulated audit failure'; END IF;
+      RETURN NEW;
+    END $$;
+    CREATE TRIGGER test_fail_schedule_audit BEFORE INSERT ON public.lead_events
+      FOR EACH ROW EXECUTE FUNCTION public.test_fail_schedule_audit();
+  `)
+  try {
+    await assert.rejects(confirm(leadId, 'userA', D(9)), /simulated audit failure/)
+    assert.deepEqual(await snapshot(leadId), before, 'nothing from the failed confirmation remains')
+    assert.equal(await leadStatus(leadId), 'scheduling')
+  } finally {
+    await db.exec(`DROP TRIGGER test_fail_schedule_audit ON public.lead_events; DROP FUNCTION public.test_fail_schedule_audit();`)
+  }
+  assert.equal((await confirm(leadId, 'userA', D(9))).ok, true, 'the same request can still be confirmed afterwards')
+})
+
 // ---------------------------------------------------------------------------
 // Quote revisions
 // ---------------------------------------------------------------------------

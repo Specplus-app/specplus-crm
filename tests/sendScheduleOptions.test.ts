@@ -40,6 +40,10 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 
 await import('../supabase/functions/send-schedule-options/index.ts')
 
+// Dates relative to today (UTC), so the fixtures never expire.
+const day = (offset: number) => new Date(Date.now() + offset * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+const longUtc = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
+
 const OFFER_ID = '33333333-3333-4333-8333-333333333333'
 const TOKEN = '44444444-4444-4444-8444-444444444444'
 
@@ -51,7 +55,7 @@ type MockState = {
 }
 
 function scenario(overrides: {
-  offerStatus?: string; quoteStatus?: string; shop?: Record<string, unknown>; note?: string | null; shopId?: string
+  offerStatus?: string; quoteStatus?: string; shop?: Record<string, unknown>; note?: string | null; shopId?: string; dates?: string[]
 } = {}): MockState {
   const state: MockState = {
     users: { 'user-token': { id: 'user-a' } },
@@ -63,8 +67,7 @@ function scenario(overrides: {
         is_reschedule: false,
       }],
       schedule_offer_options: [
-        { offer_id: OFFER_ID, start_date: '2026-11-09' },
-        { offer_id: OFFER_ID, start_date: '2026-11-02' },
+        ...(overrides.dates ?? [day(33), day(26)]).map((start_date) => ({ offer_id: OFFER_ID, start_date })),
       ],
       leads: [{ id: 'lead-1', customer_name: 'Pat', customer_email: 'pat@example.test', vehicle_name: 'Truck' }],
       shops: [{ id: 'shop-a', name: 'Shop A', contact_email: 'shop@example.test', subscription_status: 'active', trial_ends_at: null, is_lifetime_free: false, ...overrides.shop }],
@@ -100,9 +103,9 @@ test('emails the existing quote review link with the dates, then activates the o
   assert.deepEqual(emails[0].to, ['pat@example.test'])
   assert.ok(emails[0].html.includes(`/q/${TOKEN}`), 'links to the project quote review page')
   // Calendar dates, sorted, never shifted by a timezone.
-  const nov2 = emails[0].html.indexOf('November 2, 2026')
-  const nov9 = emails[0].html.indexOf('November 9, 2026')
-  assert.ok(nov2 > 0 && nov9 > nov2)
+  const first = emails[0].html.indexOf(longUtc(day(26)))
+  const second = emails[0].html.indexOf(longUtc(day(33)))
+  assert.ok(first > 0 && second > first)
   assert.ok(emails[0].html.includes('Mornings &lt;b&gt;only&lt;/b&gt;'), 'customer note is escaped')
   assert.deepEqual(state.rpcCalls.map((c) => [c.name, c.isAdmin]), [['mark_schedule_offer_sent', true]])
   assert.equal(body.quote_url, `https://quotes.specplus.app/q/${TOKEN}`)
@@ -132,6 +135,20 @@ test('already sent or replaced options are refused before any email', async () =
     assert.equal(state.rpcCalls.length, 0)
   }
   assert.equal(emails.length, 0)
+})
+
+test('expired draft options are never emailed; staff are told to offer fresh dates', async () => {
+  for (const dates of [[day(-7), day(10)], [day(-2)]]) {
+    const state = scenario({ dates })
+    const { status, body } = await send()
+    assert.equal(status, 409)
+    assert.match(body.error, /passed\. Offer fresh dates/)
+    assert.equal(state.rpcCalls.length, 0)
+  }
+  assert.equal(emails.length, 0)
+  // Yesterday (UTC) is still open, matching the database tolerance.
+  scenario({ dates: [day(-1), day(5)] })
+  assert.equal((await send()).status, 200)
 })
 
 test('options for an unapproved or revised quote are refused', async () => {

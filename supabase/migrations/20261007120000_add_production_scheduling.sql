@@ -316,6 +316,18 @@ BEGIN
 END;
 $$;
 
+-- A start date stays eligible until it has passed, with one day of tolerance
+-- for shops west of UTC. Offering, sending, requesting and confirming all use
+-- this same rule.
+CREATE OR REPLACE FUNCTION public.schedule_start_date_is_open(p_start date)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SET search_path = ''
+AS $$
+  SELECT p_start IS NOT NULL AND p_start >= current_date - 1;
+$$;
+
 -- ===========================================================================
 -- 4. Lead status guard
 -- ===========================================================================
@@ -446,8 +458,7 @@ BEGIN
   IF v_dates IS NULL OR array_length(v_dates, 1) NOT BETWEEN 1 AND 10 THEN
     RAISE EXCEPTION 'Offer between 1 and 10 start dates.' USING ERRCODE = 'check_violation';
   END IF;
-  -- One day of tolerance for shops west of UTC.
-  IF v_dates[1] < current_date - 1 THEN
+  IF NOT public.schedule_start_date_is_open(v_dates[1]) THEN
     RAISE EXCEPTION 'Start dates cannot be in the past.' USING ERRCODE = 'check_violation';
   END IF;
   IF v_note IS NOT NULL AND char_length(v_note) > 1000 THEN
@@ -502,6 +513,12 @@ BEGIN
   v_quote := public.schedule_current_quote(v_lead.id);
   IF v_quote.id IS DISTINCT FROM v_offer.quote_id OR v_quote.status <> 'approved' OR v_quote.superseded_at IS NOT NULL THEN
     RAISE EXCEPTION 'The quote changed. Offer new dates for the current approved quote.' USING ERRCODE = 'check_violation';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM public.schedule_offer_options o
+    WHERE o.offer_id = v_offer.id AND NOT public.schedule_start_date_is_open(o.start_date)
+  ) THEN
+    RAISE EXCEPTION 'One or more of these dates have passed. Offer fresh dates.' USING ERRCODE = 'check_violation';
   END IF;
 
   PERFORM set_config('specplus.actor_type', v_role, true);
@@ -564,6 +581,9 @@ BEGIN
   SELECT * INTO v_offer FROM public.schedule_offers o WHERE o.id = v_request.offer_id FOR UPDATE;
   IF v_offer.status <> 'active' THEN
     RAISE EXCEPTION 'The date options for this request were replaced.' USING ERRCODE = 'check_violation';
+  END IF;
+  IF NOT public.schedule_start_date_is_open(v_request.start_date) THEN
+    RAISE EXCEPTION 'The requested start date has passed. Offer fresh dates.' USING ERRCODE = 'check_violation';
   END IF;
   v_quote := public.schedule_current_quote(v_lead.id);
   IF v_quote.id IS DISTINCT FROM v_request.quote_id OR v_quote.id IS DISTINCT FROM v_offer.quote_id
@@ -774,7 +794,7 @@ BEGIN
   IF v_lead.status IN ('in_progress', 'completed', 'lost', 'archived') THEN
     RETURN jsonb_build_object('ok', false, 'error', 'not_available');
   END IF;
-  IF v_option.start_date < current_date - 1 THEN
+  IF NOT public.schedule_start_date_is_open(v_option.start_date) THEN
     RETURN jsonb_build_object('ok', false, 'error', 'date_passed');
   END IF;
 
@@ -881,6 +901,7 @@ REVOKE ALL ON FUNCTION public.schedule_current_quote(uuid) FROM PUBLIC, anon, au
 REVOKE ALL ON FUNCTION public.schedule_version_of(uuid) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.schedule_bump_version(uuid, uuid) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.schedule_check_version(uuid, integer) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.schedule_start_date_is_open(date) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.leads_schedule_status_guard() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.quotes_invalidate_schedule_offers() FROM PUBLIC, anon, authenticated;
 

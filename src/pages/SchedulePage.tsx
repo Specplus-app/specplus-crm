@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { agendaKey, agendaReducer, initialAgenda } from '../lib/agendaState'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { supabase, getWorkflowMeta, workflowStatusFor } from '../lib/supabase'
@@ -28,43 +29,62 @@ export default function SchedulePage() {
   const { profile } = useAuth()
   const navigate = useNavigate()
   const [weekStart, setWeekStart] = useState<DateOnly>(() => startOfWeek(todayDateOnly()))
-  const [jobs, setJobs] = useState<AgendaJob[]>([])
-  const [pending, setPending] = useState<PendingRequest[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [agenda, dispatch] = useReducer(
+    agendaReducer<AgendaJob, PendingRequest>,
+    undefined,
+    () => initialAgenda<AgendaJob, PendingRequest>(),
+  )
+  const loadSeq = useRef(0)
 
   const days = useMemo(() => weekDays(weekStart), [weekStart])
   const weekEnd = days[6]
   const today = todayDateOnly()
+  const shopId = profile?.shop_id ?? null
+  const viewKey = shopId ? agendaKey(shopId, weekStart) : null
 
   const load = useCallback(async () => {
-    if (!profile?.shop_id) return
-    setLoading(true)
-    setError(null)
-    const [jobsRes, pendingRes] = await Promise.all([
-      supabase.from('schedule_reservations')
-        .select(`id, lead_id, start_date, estimated_ready_date, lead:leads(${LEAD_FIELDS})`)
-        .eq('shop_id', profile.shop_id)
-        .eq('status', 'active')
-        .lte('start_date', weekEnd)
-        .gte('estimated_ready_date', weekStart)
-        .order('start_date', { ascending: true }),
-      supabase.from('schedule_requests')
-        .select(`id, lead_id, start_date, requested_at, lead:leads(${LEAD_FIELDS})`)
-        .eq('shop_id', profile.shop_id)
-        .eq('status', 'pending')
-        .gte('start_date', weekStart)
-        .lte('start_date', weekEnd)
-        .order('start_date', { ascending: true }),
-    ])
-    if (jobsRes.error || pendingRes.error) {
-      setError((jobsRes.error ?? pendingRes.error)!.message)
-    } else {
-      setJobs((jobsRes.data ?? []) as unknown as AgendaJob[])
-      setPending((pendingRes.data ?? []) as unknown as PendingRequest[])
+    if (!shopId) return
+    const id = ++loadSeq.current
+    dispatch({ type: 'loadStart', id, key: agendaKey(shopId, weekStart) })
+    try {
+      const [jobsRes, pendingRes] = await Promise.all([
+        supabase.from('schedule_reservations')
+          .select(`id, lead_id, start_date, estimated_ready_date, lead:leads(${LEAD_FIELDS})`)
+          .eq('shop_id', shopId)
+          .eq('status', 'active')
+          .lte('start_date', weekEnd)
+          .gte('estimated_ready_date', weekStart)
+          .order('start_date', { ascending: true }),
+        supabase.from('schedule_requests')
+          .select(`id, lead_id, start_date, requested_at, lead:leads(${LEAD_FIELDS})`)
+          .eq('shop_id', shopId)
+          .eq('status', 'pending')
+          .gte('start_date', weekStart)
+          .lte('start_date', weekEnd)
+          .order('start_date', { ascending: true }),
+      ])
+      if (jobsRes.error || pendingRes.error) {
+        dispatch({ type: 'loadFailure', id, error: (jobsRes.error ?? pendingRes.error)!.message })
+        return
+      }
+      dispatch({
+        type: 'loadSuccess',
+        id,
+        jobs: (jobsRes.data ?? []) as unknown as AgendaJob[],
+        pending: (pendingRes.data ?? []) as unknown as PendingRequest[],
+      })
+    } catch (err) {
+      dispatch({ type: 'loadFailure', id, error: err instanceof Error ? err.message : 'Network error' })
     }
-    setLoading(false)
-  }, [profile?.shop_id, weekStart, weekEnd])
+  }, [shopId, weekStart, weekEnd])
+
+  // Only rows loaded for the week (and shop) on screen are ever shown.
+  const current = agenda.key === viewKey
+  const jobs = current ? agenda.jobs : []
+  const pending = current ? agenda.pending : []
+  const loading = !current || agenda.status === 'loading'
+  const loaded = current && agenda.loaded
+  const error = current ? agenda.error : null
 
   useEffect(() => {
     load()
@@ -96,10 +116,12 @@ export default function SchedulePage() {
           </div>
         )}
 
-        {loading ? (
-          <div className="grid grid-cols-1 lg:grid-cols-7 gap-2">
-            {days.map((d) => <div key={d} className="h-32 bg-white/5 rounded-xl animate-pulse" />)}
-          </div>
+        {!loaded ? (
+          loading && (
+            <div className="grid grid-cols-1 lg:grid-cols-7 gap-2" aria-busy="true">
+              {days.map((d) => <div key={d} className="h-32 bg-white/5 rounded-xl animate-pulse" />)}
+            </div>
+          )
         ) : (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-2">

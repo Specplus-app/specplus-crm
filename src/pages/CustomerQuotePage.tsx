@@ -292,7 +292,7 @@ export default function CustomerQuotePage() {
 
         {/* Production date: offered options (approved quote only) or a confirmed booking. */}
         {!quote.is_superseded && (
-          <CustomerSchedule token={token!} shopName={quote.shop.name} staffPreview={quote.viewer_is_staff} />
+          <CustomerSchedule token={token!} shopName={quote.shop.name} staffPreview={quote.viewer_is_staff} quoteApproved={quote.status === 'approved'} />
         )}
 
         {/* Conversation */}

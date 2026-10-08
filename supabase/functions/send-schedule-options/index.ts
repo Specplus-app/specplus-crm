@@ -142,6 +142,12 @@ Deno.serve(async (req: Request) => {
     if (dates.length === 0) {
       return json(400, { error: 'Add at least one start date.' })
     }
+    // Same rule as the database (schedule_start_date_is_open): a date has
+    // passed once it is earlier than yesterday (UTC). Never email those.
+    const earliestOpen = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    if (dates[0] < earliestOpen) {
+      return json(409, { error: 'One or more of these dates have passed. Offer fresh dates.' })
+    }
     const customerEmail = String(lead.customer_email ?? '').trim()
     if (!customerEmail) {
       return json(400, { error: 'This lead has no customer email address.' })

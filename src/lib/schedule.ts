@@ -4,26 +4,7 @@ import type {
 } from './scheduleRules'
 
 export * from './scheduleRules'
-
-// Customer-safe shape returned by get_public_schedule.
-export type PublicSchedule = {
-  can_request: boolean
-  offer: { note: string | null; is_reschedule: boolean; options: { id: string; start_date: string }[] } | null
-  request: { option_id: string; start_date: string; requested_at: string } | null
-  booking: { start_date: string; estimated_ready_date: string } | null
-}
-
-export const PUBLIC_SCHEDULE_ERRORS: Record<string, string> = {
-  options_replaced: 'These dates were replaced by the shop. Please choose from the current options.',
-  superseded: 'This quote has been revised. Please use the latest quote link from the shop.',
-  quote_not_approved: 'Approve the current quote before choosing a date.',
-  invalid_option: 'That date is not available for this project.',
-  date_passed: 'That date has passed. Please choose another date or message the shop.',
-  not_available: 'Dates can no longer be chosen for this project. Please message the shop.',
-  staff_preview: 'You are signed in as shop staff. Customers choose dates from their own link.',
-  rate_limited: 'Too many changes in a short time. Please wait a few minutes and try again.',
-  not_found: 'Quote not found.',
-}
+export * from './customerScheduleState'
 
 type Result<T> = { data: T | null; error: string | null }
 
