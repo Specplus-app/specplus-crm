@@ -84,3 +84,49 @@ export function jobsByDay<T extends AgendaJob>(jobs: T[], days: DateOnly[]): Map
   }
   return map
 }
+
+const pad = (n: number, width = 2) => String(n).padStart(width, '0')
+
+export function startOfMonth(date: DateOnly): DateOnly {
+  toUtc(date)
+  return `${date.slice(0, 7)}-01`
+}
+
+// First day of the month `months` away from the month containing `date`.
+export function addMonths(date: DateOnly, months: number): DateOnly {
+  toUtc(date)
+  const index = Number(date.slice(0, 4)) * 12 + Number(date.slice(5, 7)) - 1 + months
+  return `${pad(Math.floor(index / 12), 4)}-${pad((index % 12) + 1)}-01`
+}
+
+export function endOfMonth(date: DateOnly): DateOnly {
+  return addDays(addMonths(date, 1), -1)
+}
+
+export function isSameMonth(a: DateOnly, b: DateOnly): boolean {
+  return a.slice(0, 7) === b.slice(0, 7)
+}
+
+// Whole Monday–Sunday weeks covering the month (4 to 6 rows), including
+// the leading/trailing days of the neighbouring months shown in the grid.
+export function monthGridDays(date: DateOnly): DateOnly[] {
+  const start = startOfWeek(startOfMonth(date))
+  const end = addDays(startOfWeek(endOfMonth(date)), 6)
+  return Array.from({ length: daysBetween(start, end) + 1 }, (_, i) => addDays(start, i))
+}
+
+export type CalendarView = 'week' | 'month'
+
+// Every date the calendar displays for a view around `focus`.
+export function calendarDays(view: CalendarView, focus: DateOnly): DateOnly[] {
+  return view === 'week' ? weekDays(startOfWeek(focus)) : monthGridDays(focus)
+}
+
+// Prev/Next: a week or a calendar month at a time.
+export function shiftFocus(view: CalendarView, focus: DateOnly, step: number): DateOnly {
+  return view === 'week' ? addDays(startOfWeek(focus), 7 * step) : addMonths(focus, step)
+}
+
+export function formatMonth(date: DateOnly): string {
+  return formatDateOnly(startOfMonth(date), { month: 'long', year: 'numeric' })
+}

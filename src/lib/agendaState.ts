@@ -1,7 +1,8 @@
-// Load state for the weekly agenda. Each load carries a sequence number and
-// the shop/week it is for; responses that arrive out of order are ignored,
-// and switching to another shop/week clears the previous week's rows before
-// anything new arrives (also when that load then fails). Pure, unit tested.
+// Load state for the production calendar. Each load carries a sequence
+// number and the shop/date range it is for; responses that arrive out of
+// order are ignored, and switching to another shop, week, month or view
+// clears the previous range's rows before anything new arrives (also when
+// that load then fails). Pure, unit tested.
 
 export type AgendaState<J, P> = {
   key: string | null
@@ -20,8 +21,9 @@ export type AgendaAction<J, P> =
   | { type: 'loadSuccess'; id: number; jobs: J[]; pending: P[] }
   | { type: 'loadFailure'; id: number; error: string }
 
-export function agendaKey(shopId: string, weekStart: string): string {
-  return `${shopId}|${weekStart}`
+// Identifies the shop and the full displayed date range (inclusive).
+export function agendaKey(shopId: string, rangeStart: string, rangeEnd: string): string {
+  return `${shopId}|${rangeStart}|${rangeEnd}`
 }
 
 export function initialAgenda<J, P>(): AgendaState<J, P> {

@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  addDays, daysBetween, formatDateOnly, formatDateRange, isDateOnly, jobsByDay, overlaps, startOfWeek,
+  addDays, addMonths, calendarDays, daysBetween, endOfMonth, formatDateOnly, formatDateRange, formatMonth, isDateOnly,
+  isSameMonth, jobsByDay, monthGridDays, overlaps, shiftFocus, startOfMonth, startOfWeek,
   todayDateOnly, weekDays,
 } from '../src/lib/scheduleDates.ts'
 
@@ -58,4 +59,68 @@ test('validation and formatting helpers', () => {
   assert.equal(daysBetween('2026-10-05', '2026-10-12'), 7)
   assert.equal(formatDateRange('2026-10-05', '2026-10-05'), 'Mon, Oct 5')
   assert.equal(formatDateRange('2026-12-30', '2027-01-04'), 'Dec 30 – Jan 4, 2027')
+})
+
+test('month navigation crosses year boundaries and lands on the 1st', () => {
+  assert.equal(startOfMonth('2026-10-31'), '2026-10-01')
+  assert.equal(addMonths('2026-12-15', 1), '2027-01-01')
+  assert.equal(addMonths('2027-01-31', -1), '2026-12-01')
+  assert.equal(addMonths('2026-01-31', 1), '2026-02-01', 'no day overflow into March')
+  assert.equal(addMonths('2026-10-01', -22), '2024-12-01')
+  assert.equal(addMonths('2026-10-01', 15), '2028-01-01')
+  assert.equal(shiftFocus('month', '2026-12-09', 1), '2027-01-01')
+  assert.equal(shiftFocus('month', '2027-01-01', -1), '2026-12-01')
+  assert.equal(shiftFocus('week', '2026-12-30', 1), '2027-01-04')
+  assert.equal(formatMonth('2027-01-01'), 'January 2027')
+  assert.equal(isSameMonth('2026-12-31', '2027-01-01'), false)
+})
+
+test('February lengths, including leap years', () => {
+  assert.equal(endOfMonth('2028-02-10'), '2028-02-29')
+  assert.equal(endOfMonth('2026-02-10'), '2026-02-28')
+  assert.equal(endOfMonth('2100-02-01'), '2100-02-28', 'century years are not leap years')
+  assert.equal(endOfMonth('2000-02-01'), '2000-02-29')
+  const feb2028 = monthGridDays('2028-02-15')
+  assert.ok(feb2028.includes('2028-02-29'))
+  assert.equal(feb2028.filter((d) => isSameMonth(d, '2028-02-01')).length, 29)
+})
+
+test('month grids are whole Monday–Sunday weeks covering the month', () => {
+  for (const month of ['2026-10-01', '2026-11-01', '2027-02-01', '2028-02-01', '2026-03-01', '2027-08-01']) {
+    const days = monthGridDays(month)
+    assert.equal(days.length % 7, 0, month)
+    assert.ok(days.length >= 28 && days.length <= 42, month)
+    assert.equal(days[0], startOfWeek(days[0]), `${month} starts on a Monday`)
+    assert.ok(days[0] <= month && days.at(-1)! >= endOfMonth(month), `${month} fully covered`)
+    assert.ok(days.slice(1).every((d, i) => d === addDays(days[i], 1)), `${month} contiguous`)
+  }
+  assert.deepEqual([monthGridDays('2026-10-01')[0], monthGridDays('2026-10-01').at(-1)], ['2026-09-28', '2026-11-01'])
+  assert.equal(monthGridDays('2027-02-01').length, 28, 'Feb 2027 starts on a Monday: four rows')
+  assert.equal(monthGridDays('2026-08-01').length, 42, 'Aug 2026 starts on a Saturday: six rows')
+  // Year boundary: the December 2026 grid runs into January 2027.
+  const dec = monthGridDays('2026-12-01')
+  assert.deepEqual([dec[0], dec.at(-1)], ['2026-11-30', '2027-01-03'])
+  assert.deepEqual(calendarDays('week', '2026-12-31'), weekDays('2026-12-28'))
+  assert.deepEqual(calendarDays('month', '2026-12-31'), dec)
+})
+
+test('month view shows spanning and overlapping jobs on every date they cover', () => {
+  const days = monthGridDays('2026-12-01') // Nov 30 – Jan 3
+  const jobs = [
+    { id: 'from-november', start_date: '2026-11-25', estimated_ready_date: '2026-12-02' },
+    { id: 'into-january', start_date: '2026-12-29', estimated_ready_date: '2027-01-08' },
+    { id: 'overlap-a', start_date: '2026-12-14', estimated_ready_date: '2026-12-16' },
+    { id: 'overlap-b', start_date: '2026-12-15', estimated_ready_date: '2026-12-15' },
+    { id: 'overlap-c', start_date: '2026-12-10', estimated_ready_date: '2026-12-20' },
+  ]
+  const byDay = jobsByDay(jobs, days)
+  const on = (id: string) => days.filter((d) => byDay.get(d)!.some((j) => j.id === id))
+  assert.deepEqual(on('from-november'), ['2026-11-30', '2026-12-01', '2026-12-02'])
+  assert.deepEqual(on('into-january'), ['2026-12-29', '2026-12-30', '2026-12-31', '2027-01-01', '2027-01-02', '2027-01-03'])
+  assert.deepEqual(byDay.get('2026-12-15')!.map((j) => j.id), ['overlap-a', 'overlap-b', 'overlap-c'])
+  assert.equal(on('overlap-c').length, 11)
+  // The loaded range is the whole grid, so jobs touching only the leading or
+  // trailing days are fetched too.
+  assert.equal(overlaps('2026-11-20', '2026-11-30', days[0], days.at(-1)!), true)
+  assert.equal(overlaps('2027-01-04', '2027-01-09', days[0], days.at(-1)!), false)
 })

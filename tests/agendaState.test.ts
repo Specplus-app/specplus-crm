@@ -6,8 +6,8 @@ type Row = { id: string }
 const run = (actions: AgendaAction<Row, Row>[], start: AgendaState<Row, Row> = initialAgenda<Row, Row>()) =>
   actions.reduce((s, a) => agendaReducer(s, a), start)
 
-const W1 = agendaKey('shop-a', '2026-10-05')
-const W2 = agendaKey('shop-a', '2026-10-12')
+const W1 = agendaKey('shop-a', '2026-10-05', '2026-10-11')
+const W2 = agendaKey('shop-a', '2026-10-12', '2026-10-18')
 
 test('a slow response for the previous week cannot overwrite the new week', () => {
   const s = run([
@@ -52,6 +52,25 @@ test('retrying the same week keeps its rows while reloading; a shop change clear
   ])
   const retry = run([{ type: 'loadStart', id: 2, key: W1 }, { type: 'loadFailure', id: 2, error: 'blip' }], week1)
   assert.deepEqual([retry.jobs.length, retry.loaded, retry.error], [1, true, 'blip'])
-  const otherShop = agendaReducer(week1, { type: 'loadStart', id: 3, key: agendaKey('shop-b', '2026-10-05') })
+  const otherShop = agendaReducer(week1, { type: 'loadStart', id: 3, key: agendaKey('shop-b', '2026-10-05', '2026-10-11') })
   assert.deepEqual([otherShop.jobs, otherShop.loaded], [[], false])
+})
+
+test('rapid month/week switching only ever shows the range on screen', () => {
+  const OCT = agendaKey('shop-a', '2026-09-28', '2026-11-01') // October month grid
+  const s = run([
+    { type: 'loadStart', id: 1, key: OCT },
+    { type: 'loadStart', id: 2, key: W1 }, // to Week
+    { type: 'loadStart', id: 3, key: OCT }, // straight back to Month
+    { type: 'loadSuccess', id: 2, jobs: [{ id: 'week-only' }], pending: [] },
+    { type: 'loadFailure', id: 1, error: 'first month load failed late' },
+  ])
+  assert.deepEqual([s.key, s.status, s.jobs, s.loaded, s.error], [OCT, 'loading', [], false, null])
+  const done = run([
+    { type: 'loadSuccess', id: 3, jobs: [{ id: 'month-job' }], pending: [{ id: 'month-request' }] },
+    { type: 'loadSuccess', id: 1, jobs: [{ id: 'stale-month' }], pending: [] },
+  ], s)
+  assert.deepEqual([done.jobs.map((j) => j.id), done.pending.length, done.status], [['month-job'], 1, 'ready'])
+  // Switching to a week inside the month still clears the month's rows.
+  assert.deepEqual(agendaReducer(done, { type: 'loadStart', id: 4, key: W1 }).jobs, [])
 })
