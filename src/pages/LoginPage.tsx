@@ -53,14 +53,14 @@ export default function LoginPage({ mode = 'signin' }: Props) {
       </div>
 
       <div className="relative w-full max-w-md">
-        <div className="flex flex-col items-center mb-8">
+        <div className="flex flex-col items-center mb-6">
           <img
             src="/Spec_Plus_Logo.png"
             alt="SpecPlus"
-            className="h-16 w-auto mb-4 drop-shadow-lg"
+            className="h-28 sm:h-32 w-auto max-w-full object-contain mb-3 drop-shadow-lg"
           />
-          <h1 className="text-2xl font-bold text-white tracking-tight">SpecPlus CRM</h1>
-          <p className="text-sm text-zinc-500 mt-1">
+          <h1 className="sr-only">SpecPlus CRM</h1>
+          <p className="text-sm text-zinc-500 text-center">
             {isSignUp ? 'Create your shop account to start managing leads' : 'Sign in to manage your shop leads'}
           </p>
         </div>
