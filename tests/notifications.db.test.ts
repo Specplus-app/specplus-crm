@@ -240,26 +240,96 @@ test('a request submitted from a signed-in browser still notifies, except the su
 // Durability, duplicates, history
 // ---------------------------------------------------------------------------
 
-test('notification failures never fail or lose the customer submission or message', async () => {
+const breakNotifications = () => db.exec(`
+  CREATE FUNCTION public.test_break_notifications() RETURNS trigger LANGUAGE plpgsql AS $$
+  BEGIN RAISE EXCEPTION 'notification storage unavailable'; END $$;
+  CREATE TRIGGER test_break_notifications BEFORE INSERT ON public.notification_events
+    FOR EACH ROW EXECUTE FUNCTION public.test_break_notifications();`)
+const repairNotifications = () =>
+  db.exec(`DROP TRIGGER test_break_notifications ON public.notification_events; DROP FUNCTION public.test_break_notifications();`)
+const recover = (limit = 100) =>
+  as(db, service, async (tx: any) => one(tx, `SELECT public.recover_notification_events($1) AS r`, [limit])).then((r: any) => r.r)
+// Simulates an event whose notification was lost, written with triggers off.
+async function lostEvent(leadId: string, createdAt: string) {
+  await db.exec(`SET session_replication_role = replica`)
+  try {
+    return (await one(db, `INSERT INTO lead_events (lead_id, shop_id, event_type, actor_type, metadata, created_at)
+      SELECT id, shop_id, 'lead_created', 'customer', '{}'::jsonb, ${createdAt} FROM leads WHERE id = $1 RETURNING id`, [leadId])).id as string
+  } finally {
+    await db.exec(`SET session_replication_role = origin`)
+  }
+}
+
+test('notification failures never fail or lose the customer action, and are recovered once storage works', async () => {
+  await subscribe('a2')
   const leadId = await customerLead('shopA')
   const q = await sentQuote(leadId, 'a1')
-  await db.exec(`
-    CREATE FUNCTION public.test_break_notifications() RETURNS trigger LANGUAGE plpgsql AS $$
-    BEGIN RAISE EXCEPTION 'notification storage unavailable'; END $$;
-    CREATE TRIGGER test_break_notifications BEFORE INSERT ON public.notification_events
-      FOR EACH ROW EXECUTE FUNCTION public.test_break_notifications();`)
+  let brokenLead = ''
+  let messageId = ''
+  await breakNotifications()
   try {
-    const brokenLead = await customerLead('shopA', true)
+    brokenLead = await customerLead('shopA', true)
     assert.ok(brokenLead, 'the request was still saved')
     assert.equal((await one(db, `SELECT count(*)::int AS n FROM lead_events WHERE lead_id = $1 AND event_type = 'lead_created'`, [brokenLead])).n, 1)
     assert.deepEqual(await kinds(brokenLead), [])
 
     const sent = await customerMessage(q.public_token, 'Still there?')
     assert.equal(sent.ok, true, 'the message was still sent')
-    assert.equal((await one(db, `SELECT count(*)::int AS n FROM quote_messages WHERE id = $1`, [sent.message_id])).n, 1)
+    messageId = sent.message_id
+    assert.equal((await one(db, `SELECT count(*)::int AS n FROM quote_messages WHERE id = $1`, [messageId])).n, 1)
+
+    // Recovery while storage is still failing: nothing lost, nothing raised.
+    const whileBroken = await recover()
+    assert.ok(whileBroken.failed >= 2)
+    assert.deepEqual(await kinds(brokenLead), [])
   } finally {
-    await db.exec(`DROP TRIGGER test_break_notifications ON public.notification_events; DROP FUNCTION public.test_break_notifications();`)
+    await repairNotifications()
   }
+
+  // The dispatcher's next run rebuilds both from the preserved audit events.
+  const first = await recover()
+  assert.equal(first.failed, 0)
+  assert.ok(first.recovered >= 2)
+  assert.deepEqual(await kinds(brokenLead), ['new_request'])
+  assert.ok((await deliveries(brokenLead)).some((d: any) => d.channel === 'email' && d.recipient_type === 'shop'))
+  assert.ok((await deliveries(brokenLead)).some((d: any) => d.channel === 'push'))
+  assert.deepEqual(await inboxUsers(brokenLead), sorted('a1', 'a2'))
+  assert.deepEqual(await kinds(leadId), ['new_request', 'customer_message'])
+
+  // Idempotent: running again (or concurrently) adds nothing.
+  const before = (await deliveries(brokenLead)).length
+  assert.deepEqual(await recover(), { recovered: 0, failed: 0 })
+  assert.equal((await deliveries(brokenLead)).length, before)
+  // The customer's records were never touched.
+  assert.ok(await one(db, `SELECT id FROM leads WHERE id = $1`, [brokenLead]))
+  assert.ok(await one(db, `SELECT id FROM quote_messages WHERE id = $1`, [messageId]))
+})
+
+test('recovery is bounded: activation boundary, 24-hour window and per-run limit', async () => {
+  await recover(500) // start from a clean slate
+  const leadId = await customerLead('shopA')
+  const activatedAt = (await one(db, `SELECT activated_at FROM notification_settings`)).activated_at
+  const tooOld = await lostEvent(leadId, `now() - interval '25 hours'`)
+  const historical = await lostEvent(leadId, `'${new Date(new Date(activatedAt).getTime() - 1000).toISOString()}'::timestamptz`)
+  const lost = [await lostEvent(leadId, 'now()'), await lostEvent(leadId, 'now()'), await lostEvent(leadId, 'now()')]
+
+  assert.deepEqual(await recover(2), { recovered: 2, failed: 0 }, 'at most p_limit per call')
+  assert.deepEqual(await recover(2), { recovered: 1, failed: 0 })
+  assert.deepEqual(await recover(2), { recovered: 0, failed: 0 })
+  const queued = (await db.query(`SELECT lead_event_id FROM notification_events WHERE lead_event_id = ANY($1::uuid[])`,
+    [[tooOld, historical, ...lost]])).rows.map((r: any) => r.lead_event_id).sort()
+  assert.deepEqual(queued, [...lost].sort(), 'never events before activation or older than 24 hours')
+
+  // Ineligible events (e.g. quote views) are never "recovered".
+  assert.equal((await one(db, `SELECT count(*)::int AS n FROM notification_events n JOIN lead_events e ON e.id = n.lead_event_id
+    WHERE e.event_type NOT IN ('lead_created', 'quote_message_added', 'quote_approved', 'quote_declined', 'schedule_date_requested', 'status_changed')`)).n, 0)
+
+  for (const who of [anon, staff('a1'), staff('admin')]) {
+    await assert.rejects(as(db, who, async (tx: any) => tx.query(`SELECT public.recover_notification_events(10)`)), /permission denied/)
+  }
+  // Re-running the migration's settings insert keeps the original boundary.
+  await db.query(`INSERT INTO notification_settings (id) VALUES (true) ON CONFLICT (id) DO NOTHING`)
+  assert.equal(new Date((await one(db, `SELECT activated_at FROM notification_settings`)).activated_at).getTime(), new Date(activatedAt).getTime())
 })
 
 test('a lead event is only ever queued once', async () => {
@@ -284,6 +354,10 @@ test('historical records are not notified when the migration is installed', asyn
     assert.equal((await one(fresh, `SELECT count(*)::int AS n FROM notification_events`)).n, 0)
     assert.equal((await one(fresh, `SELECT count(*)::int AS n FROM notification_deliveries`)).n, 0)
     assert.equal((await one(fresh, `SELECT count(*)::int AS n FROM lead_events WHERE lead_id = $1`, [oldLead])).n, 1)
+    // Recovery does not treat pre-activation events as lost.
+    const recovered = await as(fresh, { role: 'service_role' }, async (tx: any) => one(tx, `SELECT public.recover_notification_events(500) AS r`)).then((r: any) => r.r)
+    assert.deepEqual(recovered, { recovered: 0, failed: 0 })
+    assert.equal((await one(fresh, `SELECT count(*)::int AS n FROM notification_events`)).n, 0)
     // ...while new events afterwards are.
     const newer = await newLead(fresh, 'shopA', false)
     assert.equal((await one(fresh, `SELECT count(*)::int AS n FROM notification_events WHERE lead_id = $1`, [newer])).n, 1)
@@ -538,4 +612,60 @@ test('only the service role can claim or complete deliveries', async () => {
   for (const fn of [`public.notification_enqueue(null::public.lead_events)`, `public.push_endpoint_is_allowed('x')`]) {
     await assert.rejects(as(db, staff('a1'), async (tx: any) => tx.query(`SELECT ${fn}`)), /permission denied/, fn)
   }
+})
+
+// ---------------------------------------------------------------------------
+// Device removal stays effective; lease-safe release
+// ---------------------------------------------------------------------------
+
+const touch = (userKey: string, endpoint: string) =>
+  as(db, staff(userKey), async (tx: any) => one(tx, `SELECT public.touch_push_subscription($1, $2, $3) AS s`, [endpoint, P256DH, AUTH])).then((r: any) => r.s)
+const pushTargetsFor = async (leadId: string) => (await deliveries(leadId)).filter((d: any) => d.channel === 'push').map((d: any) => d.subscription_id)
+
+test('a removed device stays removed through reload and login until it is explicitly re-enabled', async () => {
+  const phone = await subscribe('a2')
+  assert.equal(await touch('a2', phone.endpoint), 'active', 'page load refreshes an existing registration')
+
+  // Removed from another device (Notifications > Your devices > Remove).
+  const removed = await as(db, staff('a2'), async (tx: any) => one(tx, `SELECT public.delete_push_subscription($1, null) AS ok`, [phone.id]))
+  assert.equal(removed.ok, true)
+
+  // The phone reloads, then signs in again: page-load sync must not resurrect it.
+  assert.equal(await touch('a2', phone.endpoint), 'missing')
+  assert.equal(await touch('a2', phone.endpoint), 'missing')
+  assert.equal(await one(db, `SELECT id FROM push_subscriptions WHERE endpoint = $1`, [phone.endpoint]), undefined)
+  const whileRemoved = await customerLead('shopA')
+  assert.ok(!(await pushTargetsFor(whileRemoved)).includes(phone.id), 'the removed phone is not targeted')
+
+  // Only an explicit Enable on that device brings it back.
+  const again = await subscribe('a2', phone.endpoint)
+  assert.equal(await touch('a2', phone.endpoint), 'active')
+  const afterEnable = await customerLead('shopA')
+  assert.ok((await pushTargetsFor(afterEnable)).includes(again.id))
+})
+
+test('device sync never takes over or reveals another account\'s device', async () => {
+  const shared = await subscribe('b1')
+  assert.equal(await touch('a1', shared.endpoint), 'other_user')
+  const row = await one(db, `SELECT user_id FROM push_subscriptions WHERE endpoint = $1`, [shared.endpoint])
+  assert.equal(row.user_id, ids.b1, 'ownership unchanged')
+  await assert.rejects(as(db, anon, async (tx: any) => tx.query(`SELECT public.touch_push_subscription($1, $2, $3)`, [shared.endpoint, P256DH, AUTH])), /permission denied/)
+})
+
+test('a worker out of time releases its lease without spending an attempt', async () => {
+  await clearQueue()
+  const leadId = await customerLead('shopA')
+  const [row] = (await claim()).filter((r: any) => r.lead_id === leadId)
+  const leased = await deliveryRow(row.delivery_id)
+  const leaseSeconds = (new Date(leased.leased_until).getTime() - new Date(leased.updated_at).getTime()) / 1000
+  const { LEASE_SECONDS } = await import('../supabase/functions/_shared/dispatchLimits.ts')
+  assert.equal(leaseSeconds, LEASE_SECONDS, 'dispatcher time limits assume this lease')
+
+  assert.deepEqual(await complete(row, 'release'), { ok: true, status: 'pending' })
+  const released = await deliveryRow(row.delivery_id)
+  assert.deepEqual([released.status, released.attempts, released.lease_token], ['pending', 0, null])
+  assert.deepEqual(await complete(row, 'sent'), { ok: false, error: 'lease_lost' }, 'the released lease is dead')
+  const [again] = (await claim()).filter((r: any) => r.delivery_id === row.delivery_id)
+  assert.equal(again.attempt, 1, 'immediately claimable, still on its first attempt')
+  await complete(again, 'sent')
 })

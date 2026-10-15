@@ -128,7 +128,7 @@ export async function sendWebPush(
   target: PushTarget,
   payload: unknown,
   vapid: VapidKeys,
-  options: { ttlSeconds?: number; topic?: string; urgency?: 'normal' | 'high' } = {},
+  options: { ttlSeconds?: number; topic?: string; urgency?: 'normal' | 'high'; timeoutMs?: number } = {},
 ): Promise<PushResult> {
   if (!pushEndpointIsAllowed(target.endpoint)) {
     return { outcome: 'failed', error: 'endpoint_not_allowed' }
@@ -145,12 +145,20 @@ export async function sendWebPush(
   // of the same notification that is still waiting for the device.
   if (options.topic && /^[A-Za-z0-9_-]{1,32}$/.test(options.topic)) headers.Topic = options.topic
 
+  const timeoutMs = options.timeoutMs ?? 10_000
   try {
-    const resp = await fetch(target.endpoint, { method: 'POST', headers, body, redirect: 'manual' })
+    // The signal also bounds reading the response body.
+    const signal = AbortSignal.timeout(timeoutMs)
+    const resp = await fetch(target.endpoint, { method: 'POST', headers, body, redirect: 'manual', signal })
     const outcome = classifyPushStatus(resp.status)
     const detail = outcome === 'sent' ? undefined : `HTTP ${resp.status}${await resp.text().then((t) => (t ? `: ${t.slice(0, 200)}` : '')).catch(() => '')}`
     return { outcome, status: resp.status, error: detail }
   } catch (err) {
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      // The push service may still have accepted it; a retry can duplicate
+      // (the shared Topic and notification tag usually collapse it).
+      return { outcome: 'retry', error: `timeout after ${timeoutMs}ms` }
+    }
     return { outcome: 'retry', error: `network: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300) }
   }
 }

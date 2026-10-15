@@ -3,6 +3,7 @@ import {
   LEAD_PATH_RE, base64UrlToUint8Array, deviceLabel, detectPushSupport, isIOSDevice, uint8ArrayToBase64Url,
   type PushSupport,
 } from './pushSupport'
+import { syncThisDevice, type DeviceStatus, type SyncResult } from './pushSync'
 
 export type NotificationKind =
   | 'new_request' | 'customer_message' | 'quote_approved' | 'quote_declined' | 'date_requested' | 'status_changed'
@@ -149,12 +150,29 @@ export async function disablePushOnThisDevice(): Promise<void> {
   if (error) throw new Error(error.message)
 }
 
-// Keeps this device registered to the signed-in account (e.g. after another
-// account used this browser, or the server removed an expired subscription).
-export async function syncPushSubscription(): Promise<void> {
-  if (currentPushSupport().state !== 'granted') return
-  const sub = await thisDeviceSubscription()
-  if (sub && sameKey(sub)) await saveSubscription(sub)
+// On load/login: refresh this device's registration if the signed-in user
+// still has it. Never re-creates a removed device (see pushSync.ts).
+export async function syncPushSubscription(): Promise<SyncResult> {
+  if (currentPushSupport().state !== 'granted') return 'none'
+  return syncThisDevice({
+    getSubscription: async () => {
+      const sub = await thisDeviceSubscription()
+      if (!sub) return null
+      const json = sub.toJSON()
+      return {
+        endpoint: sub.endpoint,
+        p256dh: json.keys?.p256dh ?? '',
+        auth: json.keys?.auth ?? '',
+        usesCurrentKey: sameKey(sub),
+        unsubscribe: () => sub.unsubscribe(),
+      }
+    },
+    touch: async (endpoint, p256dh, auth) => {
+      const { data, error } = await supabase.rpc('touch_push_subscription', { p_endpoint: endpoint, p_p256dh: p256dh, p_auth: auth })
+      if (error) throw new Error(error.message)
+      return data as DeviceStatus
+    },
+  })
 }
 
 export async function loadDevices(): Promise<PushDevice[]> {

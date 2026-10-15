@@ -36,22 +36,46 @@ const baseEnv = () => ({
   serve: (h: Handler) => { handler = h },
 }
 
-type Sent = { url: string; headers: Record<string, string>; body: any }
+type Sent = { url: string; headers: Record<string, string>; body: any; at: number; hadSignal: boolean }
 let emails: Sent[] = []
 let pushes: (Sent & { raw: Uint8Array })[] = []
-let resendResponses: (number | 'network')[] = []
-let pushResponses: number[] = []
+// A status, a network error, a provider that never answers ('stall': only the
+// caller's abort signal ends it), or a slow success ({ delayMs }).
+type Behaviour = number | 'network' | 'stall' | { delayMs: number }
+let resendResponses: Behaviour[] = []
+let pushResponses: Behaviour[] = []
+let inFlight = 0
+let maxInFlight = 0
+
+async function respond(behaviour: Behaviour, signal: AbortSignal | undefined, ok: () => Response): Promise<Response> {
+  inFlight++
+  maxInFlight = Math.max(maxInFlight, inFlight)
+  try {
+    if (behaviour === 'network') throw new TypeError('fetch failed')
+    if (behaviour === 'stall' || typeof behaviour === 'object') {
+      await new Promise<void>((resolve, reject) => {
+        const timer = typeof behaviour === 'object' ? setTimeout(resolve, behaviour.delayMs) : null
+        signal?.addEventListener('abort', () => { if (timer) clearTimeout(timer); reject(signal.reason) })
+      })
+      return ok()
+    }
+    return behaviour === 200 || behaviour === 201 ? ok() : new Response('provider error', { status: behaviour })
+  } finally {
+    inFlight--
+  }
+}
+
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input)
   const headers = Object.fromEntries(Object.entries((init?.headers ?? {}) as Record<string, string>))
+  const base = { url, headers, at: Date.now(), hadSignal: init?.signal instanceof AbortSignal }
   if (url === 'https://api.resend.com/emails') {
-    emails.push({ url, headers, body: JSON.parse(String(init?.body)) })
-    const status = resendResponses.shift() ?? 200
-    if (status === 'network') throw new TypeError('fetch failed')
-    return new Response(status === 200 ? JSON.stringify({ id: `re_${emails.length}` }) : 'provider error', { status })
+    emails.push({ ...base, body: JSON.parse(String(init?.body)) })
+    const n = emails.length
+    return respond(resendResponses.shift() ?? 200, init?.signal ?? undefined, () => new Response(JSON.stringify({ id: `re_${n}` }), { status: 200 }))
   }
-  pushes.push({ url, headers, body: null, raw: new Uint8Array(init?.body as ArrayBuffer) })
-  return new Response(null, { status: pushResponses.shift() ?? 201 })
+  pushes.push({ ...base, body: null, raw: new Uint8Array(init?.body as ArrayBuffer) })
+  return respond(pushResponses.shift() ?? 201, init?.signal ?? undefined, () => new Response(null, { status: 201 }))
 }) as typeof fetch
 
 await import('../supabase/functions/notification-dispatch/index.ts')
@@ -71,6 +95,7 @@ function queue(...batches: Record<string, unknown>[][]) {
     tables: {},
     rpcCalls: [],
     rpcHandlers: {
+      recover_notification_events: () => ({ data: { recovered: 0, failed: 0 }, error: null }),
       claim_notification_deliveries: () => ({ data: batches.shift() ?? [], error: null }),
       complete_notification_delivery: (args: Completion) => {
         completions.push(args)
@@ -112,6 +137,8 @@ beforeEach(() => {
   pushes = []
   resendResponses = []
   pushResponses = []
+  inFlight = 0
+  maxInFlight = 0
   queue()
 })
 
@@ -134,7 +161,7 @@ test('new request email goes to the shop with a CRM lead link', async () => {
   const row = shopEmail('new_request')
   queue([row])
   const res = await dispatch()
-  assert.deepEqual(res, { status: 200, body: { claimed: 1, sent: 1, retry: 0, failed: 0, gone: 0, lease_lost: 0 } })
+  assert.deepEqual(res, { status: 200, body: { recovered: 0, claimed: 1, sent: 1, retry: 0, failed: 0, gone: 0, released: 0, lease_lost: 0 } })
   const [mail] = emails
   assert.deepEqual(mail.body.to, ['owner@shop.example.test'])
   assert.equal(mail.body.reply_to, 'pat@customer.example.test')
@@ -254,4 +281,75 @@ test('drains several batches, and a lost lease or completion error does not stop
   assert.deepEqual([res.body.sent, res.body.lease_lost], [25, 1])
   assert.equal(state.rpcCalls.filter((c: any) => c.name === 'claim_notification_deliveries').length, 2)
   assert.ok(state.rpcCalls.every((c: any) => c.isAdmin), 'all database calls use the server-side client')
+})
+
+// ---------------------------------------------------------------------------
+// Recovery, stalled providers and slow batches
+// ---------------------------------------------------------------------------
+
+test('every run first recovers lost events, and a recovery error does not block sending', async () => {
+  queue([shopEmail('new_request')])
+  state.rpcHandlers.recover_notification_events = () => ({ data: { recovered: 3, failed: 0 }, error: null })
+  const res = await dispatch()
+  assert.equal(res.body.recovered, 3)
+  assert.deepEqual(state.rpcCalls.slice(0, 2).map((c: any) => c.name), ['recover_notification_events', 'claim_notification_deliveries'])
+  assert.equal(state.rpcCalls[0].args.p_limit, 100, 'bounded per run')
+
+  queue([shopEmail('new_request')])
+  state.rpcHandlers.recover_notification_events = () => ({ data: null, error: { message: 'statement timeout' } })
+  const degraded = await dispatch()
+  assert.deepEqual([degraded.status, degraded.body.recovered, degraded.body.sent], [200, 0, 1])
+})
+
+test('stalled providers are abandoned at the request timeout; nothing is left in flight', async () => {
+  env.NOTIFICATION_REQUEST_TIMEOUT_MS = '60'
+  const device = newReceiver()
+  const rows = [shopEmail('new_request'), pushRow(device)]
+  resendResponses = ['stall']
+  pushResponses = ['stall']
+  queue(rows)
+  const t0 = Date.now()
+  const res = await dispatch()
+  assert.ok(Date.now() - t0 < 2000, `run ended promptly (${Date.now() - t0}ms)`)
+  assert.equal(inFlight, 0, 'no provider request outlives the run')
+  assert.ok([...emails, ...pushes].every((r) => r.hadSignal), 'every provider request is bounded')
+  assert.deepEqual(completions.map((c) => [c.p_outcome, c.p_error]), [['retry', 'timeout after 60ms'], ['retry', 'timeout after 60ms']])
+  assert.equal(res.body.retry, 2)
+})
+
+test('slow providers: the budget is checked before every delivery and the rest are released unsent', async () => {
+  env.NOTIFICATION_REQUEST_TIMEOUT_MS = '200'
+  env.NOTIFICATION_RUN_BUDGET_MS = '500'
+  const rows = Array.from({ length: 10 }, () => shopEmail('new_request'))
+  resendResponses = rows.map(() => ({ delayMs: 120 }))
+  queue(rows, [shopEmail('customer_message')])
+  const t0 = Date.now()
+  const res = await dispatch()
+  const elapsed = Date.now() - t0
+
+  const sent = res.body.sent
+  assert.ok(sent >= 2 && sent <= 3, `sent ${sent} before the budget ran out`)
+  assert.equal(emails.length, sent, 'released deliveries were never sent')
+  assert.equal(res.body.released, rows.length - sent)
+  assert.deepEqual(completions.slice(sent).map((c) => c.p_outcome), Array(rows.length - sent).fill('release'))
+  // A request only starts if it can finish (timeout) inside the budget.
+  for (const e of emails) assert.ok(e.at - t0 <= 500 - 200 + 30, `started at ${e.at - t0}ms`)
+  assert.ok(elapsed <= 500 + 150, `run finished within budget (${elapsed}ms)`)
+  assert.equal(maxInFlight, 1, 'one provider request at a time')
+  assert.equal(inFlight, 0)
+  assert.equal(state.rpcCalls.filter((c: any) => c.name === 'claim_notification_deliveries').length, 1, 'no new batch once out of time')
+})
+
+test('when every provider stalls, the run still ends within budget + one timeout', async () => {
+  env.NOTIFICATION_REQUEST_TIMEOUT_MS = '50'
+  env.NOTIFICATION_RUN_BUDGET_MS = '200'
+  const rows = Array.from({ length: 10 }, () => shopEmail('new_request'))
+  resendResponses = rows.map(() => 'stall' as const)
+  queue(rows)
+  const t0 = Date.now()
+  const res = await dispatch()
+  assert.ok(Date.now() - t0 <= 200 + 50 + 150, `${Date.now() - t0}ms`)
+  assert.equal(res.body.retry + res.body.released, 10)
+  assert.ok(res.body.released > 0)
+  assert.equal(inFlight, 0)
 })
