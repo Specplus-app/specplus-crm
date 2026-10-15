@@ -48,17 +48,25 @@ GRANT ALL ON ALL TABLES IN SCHEMA storage TO anon, authenticated, service_role;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA auth TO anon, authenticated, service_role;
 `
 
-export async function createDb() {
+// options.before: stop before this migration file (to seed "historical" data
+// first, then apply the rest with applyMigrations).
+export async function createDb(options = {}) {
   const db = new PGlite()
   await db.exec(BOOTSTRAP)
+  await applyMigrations(db, { before: options.before })
+  return db
+}
+
+export async function applyMigrations(db, { from, before } = {}) {
   for (const file of readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql')).sort()) {
+    if (from && file < from) continue
+    if (before && file >= before) break
     try {
       await db.exec(readFileSync(join(MIGRATIONS, file), 'utf8'))
     } catch (err) {
       throw new Error(`Migration ${file} failed: ${err.message}`)
     }
   }
-  return db
 }
 
 // Runs fn in a transaction as an API caller, the way PostgREST would:

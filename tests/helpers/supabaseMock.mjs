@@ -30,6 +30,7 @@ export function createClient(_url, key, options = {}) {
     },
     rpc: async (name, args) => {
       state.rpcCalls.push({ name, args, isAdmin })
+      if (state.rpcHandlers?.[name]) return state.rpcHandlers[name](args, { isAdmin })
       return state.rpcResult ?? { data: { sent_at: '2026-10-06T00:00:00Z' }, error: null }
     },
   }

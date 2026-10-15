@@ -3,7 +3,9 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { supabase } from '../lib/supabase'
 import { ShopBillingProvider, computeBilling, DEFAULT_BILLING, type ShopBillingState } from '../lib/billing'
-import { LogOut, LayoutDashboard, Users, Shield, Car, Menu, X, AlertTriangle, Clock, CalendarDays } from 'lucide-react'
+import { disablePushOnThisDevice, syncPushSubscription } from '../lib/notifications'
+import NotificationBell from './NotificationBell'
+import { LogOut, LayoutDashboard, Users, Shield, Car, Menu, X, AlertTriangle, Clock, CalendarDays, Bell } from 'lucide-react'
 
 export default function AppShell() {
   const { profile, signOut } = useAuth()
@@ -33,7 +35,15 @@ export default function AppShell() {
       })
   }, [isAdmin, profile?.shop_id])
 
+  // Keep this browser's push subscription attached to whoever is signed in.
+  useEffect(() => {
+    if (isAdmin || !profile?.id) return
+    syncPushSubscription().catch(() => {})
+  }, [isAdmin, profile?.id])
+
   const handleSignOut = async () => {
+    // A signed-out device should stop receiving this account's notifications.
+    if (!isAdmin) await disablePushOnThisDevice().catch(() => {})
     await signOut()
     navigate('/login')
   }
@@ -47,6 +57,7 @@ export default function AppShell() {
         { label: 'Leads', path: '/dashboard', icon: LayoutDashboard },
         { label: 'Schedule', path: '/dashboard/schedule', icon: CalendarDays },
         { label: 'Vehicles', path: '/dashboard/vehicles', icon: Car },
+        { label: 'Notifications', path: '/dashboard/notifications', icon: Bell },
       ]
 
   const isActive = (path: string) =>
@@ -166,6 +177,7 @@ export default function AppShell() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            {!isAdmin && <NotificationBell />}
             <div className="text-right hidden sm:block">
               <p className="text-sm font-medium text-slate-200 leading-tight">{profile?.full_name || 'User'}</p>
               <p className="text-xs text-slate-500">{isAdmin ? 'Administrator' : 'Shop Owner'}</p>

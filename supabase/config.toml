@@ -18,3 +18,9 @@ verify_jwt = true
 
 [functions.send-schedule-options]
 verify_jwt = true
+
+# Called only by the server-side scheduler, which authenticates with the
+# NOTIFICATION_DISPATCH_SECRET header (checked in the function). It accepts no
+# recipients or content; it only drains the notification queue.
+[functions.notification-dispatch]
+verify_jwt = false

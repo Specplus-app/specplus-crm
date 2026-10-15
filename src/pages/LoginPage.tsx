@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
+import { safeReturnPath } from '../lib/pushSupport'
 import { Mail, Lock, Eye, EyeOff, AlertCircle, User, Building2 } from 'lucide-react'
 
 type Props = { mode?: 'signin' | 'signup' }
@@ -8,6 +9,8 @@ type Props = { mode?: 'signin' | 'signup' }
 export default function LoginPage({ mode = 'signin' }: Props) {
   const { signIn, signUp, user, profile, loading } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
+  const returnTo = (location.state as { from?: unknown } | null)?.from
   const isSignUp = mode === 'signup'
   const [fullName, setFullName] = useState('')
   const [shopName, setShopName] = useState('')
@@ -19,13 +22,18 @@ export default function LoginPage({ mode = 'signin' }: Props) {
 
   useEffect(() => {
     if (!loading && user && profile) {
-      if (profile.role === 'admin') {
+      const target = !isSignUp && (profile.role === 'admin' || profile.role === 'shop_user')
+        ? safeReturnPath(returnTo, profile.role)
+        : null
+      if (target) {
+        navigate(target, { replace: true })
+      } else if (profile.role === 'admin') {
         navigate('/admin', { replace: true })
       } else {
         navigate('/dashboard', { replace: true, state: isSignUp ? { welcome: true } : undefined })
       }
     }
-  }, [loading, user, profile, navigate, isSignUp])
+  }, [loading, user, profile, navigate, isSignUp, returnTo])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
