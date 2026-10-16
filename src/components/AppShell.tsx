@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase'
 import { ShopBillingProvider, computeBilling, DEFAULT_BILLING, type ShopBillingState } from '../lib/billing'
 import { disablePushOnThisDevice, syncPushSubscription } from '../lib/notifications'
 import NotificationBell from './NotificationBell'
+import { onShopLogoChange } from '../lib/shopLogo'
 import { LogOut, LayoutDashboard, Users, Shield, Car, Menu, X, AlertTriangle, Clock, CalendarDays, Bell, Settings, type LucideIcon } from 'lucide-react'
 
 function NavButton({ item, active, onClick }: { item: { label: string; icon: LucideIcon }; active: boolean; onClick: () => void }) {
@@ -50,6 +51,15 @@ export default function AppShell() {
         setShopLogo(data?.logo_url ?? null)
         setBilling(data ? computeBilling(data) : DEFAULT_BILLING)
       })
+  }, [isAdmin, profile?.shop_id])
+
+  // A logo uploaded or removed in Settings shows here without a reload.
+  useEffect(() => {
+    if (isAdmin || !profile?.shop_id) return
+    const shopId = profile.shop_id
+    return onShopLogoChange((change) => {
+      if (change.shopId === shopId) setShopLogo(change.logoUrl)
+    })
   }, [isAdmin, profile?.shop_id])
 
   // Keep this browser's push subscription attached to whoever is signed in.

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, Building2, Check, Copy, ExternalLink, Link2, Mail, Phone, Settings } from 'lucide-react'
+import { AlertCircle, Building2, Check, Copy, ExternalLink, Image as ImageIcon, Link2, Mail, Phone, Settings, Trash2, Upload } from 'lucide-react'
 import { useAuth } from '../lib/auth'
+import { useShopBilling } from '../lib/billing'
 import { supabase } from '../lib/supabase'
 import { LoadingScreen } from '../components/LoadingScreen'
 import { copyText, customerLinkFor, publicQuoteOrigin } from '../lib/customerLink'
+import { removeShopLogo, uploadShopLogo, type LogoResult } from '../lib/shopLogo'
 
 type ShopDetails = {
   id: string
@@ -87,7 +89,10 @@ export default function ShopSettingsPage() {
           </div>
         ) : (
           <>
-            <ShopDetailsCard shop={state.shop} />
+            <ShopDetailsCard
+              shop={state.shop}
+              onLogoChange={(logoUrl) => setState((s) => (s.status === 'ready' ? { ...s, shop: { ...s.shop, logo_url: logoUrl } } : s))}
+            />
             <QuoteRequestsCard link={customerLinkFor(PUBLIC_QUOTE_ORIGIN, state.shop)} />
           </>
         )}
@@ -96,22 +101,14 @@ export default function ShopSettingsPage() {
   )
 }
 
-function ShopDetailsCard({ shop }: { shop: ShopDetails }) {
-  const [logoFailed, setLogoFailed] = useState(false)
-  const showLogo = Boolean(shop.logo_url) && !logoFailed
+function ShopDetailsCard({ shop, onLogoChange }: { shop: ShopDetails; onLogoChange: (logoUrl: string | null) => void }) {
   return (
     <section className={card}>
       <h2 className="text-sm font-semibold text-slate-100 flex items-center gap-2">
         <Building2 size={16} className="text-cobalt-400" /> Shop details
       </h2>
-      <div className="mt-4 flex flex-col sm:flex-row gap-4 sm:items-center">
-        <div className="w-20 h-20 flex-shrink-0 rounded-xl bg-obsidian-950/80 border border-white/10 flex items-center justify-center overflow-hidden">
-          {showLogo ? (
-            <img src={shop.logo_url!} alt={`${shop.name} logo`} className="max-w-full max-h-full object-contain" onError={() => setLogoFailed(true)} />
-          ) : (
-            <span className="text-[11px] text-slate-500 text-center px-1">No logo</span>
-          )}
-        </div>
+      <div className="mt-4 flex flex-col sm:flex-row gap-5">
+        <ShopLogo shop={shop} onLogoChange={onLogoChange} />
         <dl className="min-w-0 flex-1 grid gap-3 text-sm">
           <div>
             <dt className="text-xs text-slate-500">Shop name</dt>
@@ -128,6 +125,80 @@ function ShopDetailsCard({ shop }: { shop: ShopDetails }) {
         </dl>
       </div>
     </section>
+  )
+}
+
+// Logo with the upload controls moved from Vehicles (same validation,
+// storage and permissions; see lib/shopLogo).
+function ShopLogo({ shop, onLogoChange }: { shop: ShopDetails; onLogoChange: (logoUrl: string | null) => void }) {
+  const { readOnly } = useShopBilling()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [failedUrl, setFailedUrl] = useState<string | null>(null)
+  const showLogo = Boolean(shop.logo_url) && failedUrl !== shop.logo_url
+
+  const run = async (action: () => Promise<LogoResult>) => {
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await action()
+      if (result.ok) onLogoChange(result.logoUrl)
+      else setError(result.error)
+    } catch {
+      setError('Upload failed. Please try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="sm:w-44 flex-shrink-0">
+      <div className="w-28 h-28 rounded-xl bg-obsidian-950/80 border border-white/10 flex items-center justify-center overflow-hidden">
+        {showLogo ? (
+          <img src={shop.logo_url!} alt={`${shop.name} logo`} className="w-full h-full object-contain" onError={() => setFailedUrl(shop.logo_url)} />
+        ) : (
+          <span className="flex flex-col items-center gap-1 text-[11px] text-slate-500">
+            <ImageIcon size={24} className="text-slate-600" /> No logo
+          </span>
+        )}
+      </div>
+      {readOnly ? (
+        <p className="text-xs text-slate-500 mt-2">Your trial has expired. Upgrade to change your logo.</p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2 mt-3">
+          <label
+            className={`flex items-center gap-2 text-sm font-medium rounded-lg px-3 py-2 transition-colors ${
+              busy ? 'bg-white/5 text-slate-500 cursor-not-allowed' : 'bg-cobalt-600 hover:bg-cobalt-500 text-white cursor-pointer'
+            }`}
+          >
+            <Upload size={14} />
+            {busy ? 'Saving…' : shop.logo_url ? 'Replace logo' : 'Upload logo'}
+            <input
+              type="file"
+              accept="image/*"
+              disabled={busy}
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                e.target.value = ''
+                if (file) run(() => uploadShopLogo(supabase, shop.id, file))
+              }}
+            />
+          </label>
+          {shop.logo_url && !busy && (
+            <button
+              onClick={() => run(() => removeShopLogo(supabase, shop.id))}
+              className="flex items-center gap-1.5 text-sm font-medium text-red-300 hover:text-red-200 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-lg px-3 py-2 transition-colors"
+            >
+              <Trash2 size={14} />
+              Remove
+            </button>
+          )}
+        </div>
+      )}
+      <p className="text-[11px] text-slate-500 mt-2">PNG or JPG, up to 3 MB. A transparent PNG looks best. Shown on your customer building page and in your dashboard.</p>
+      {error && <p className="text-xs text-red-300 mt-1" role="alert">{error}</p>}
+    </div>
   )
 }
 

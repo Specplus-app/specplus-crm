@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { useShopBilling } from '../lib/billing'
 import { supabase, Vehicle, formatDate, SHIP_SIZES, ShipSize, DEFAULT_LEAD_TIME_MULTIPLIER } from '../lib/supabase'
-import { Plus, Car, Edit3, Trash2, Eye, EyeOff, ChevronRight, X, Truck, Save, Clock, Image as ImageIcon, Upload, Code, Copy, Check } from 'lucide-react'
+import { Plus, Car, Edit3, Trash2, Eye, EyeOff, ChevronRight, X, Truck, Save, Clock, Code, Copy, Check } from 'lucide-react'
 
 type VehicleWithParts = Vehicle & { part_count?: number }
 
@@ -20,9 +20,6 @@ export default function ShopVehicles() {
   const [ratesLoading, setRatesLoading] = useState(true)
   const [ratesSaving, setRatesSaving] = useState(false)
   const [ratesSaved, setRatesSaved] = useState(false)
-  const [logoUrl, setLogoUrl] = useState<string | null>(null)
-  const [logoUploading, setLogoUploading] = useState(false)
-  const [logoError, setLogoError] = useState<string | null>(null)
 
   const loadVehicles = useCallback(async () => {
     if (!profile?.shop_id) return
@@ -56,7 +53,7 @@ export default function ShopVehicles() {
 
   useEffect(() => {
     if (!profile?.shop_id) return
-    supabase.from('shops').select('customizer_config, logo_url').eq('id', profile.shop_id).maybeSingle().then((res) => {
+    supabase.from('shops').select('customizer_config').eq('id', profile.shop_id).maybeSingle().then((res) => {
       if (res.data?.customizer_config) {
         const cfg = res.data.customizer_config as Record<string, unknown>
         const rates = cfg.shipping_rates as Record<ShipSize, number> | undefined
@@ -64,7 +61,6 @@ export default function ShopVehicles() {
         const mult = cfg.lead_time_multiplier as number | undefined
         if (typeof mult === 'number') setLeadMultiplierPct(Math.round(mult * 100))
       }
-      setLogoUrl((res.data?.logo_url as string | null) ?? null)
       setRatesLoading(false)
     })
   }, [profile?.shop_id])
@@ -78,45 +74,6 @@ export default function ShopVehicles() {
     setRatesSaving(false)
     setRatesSaved(true)
     setTimeout(() => setRatesSaved(false), 2000)
-  }
-
-  const handleLogoUpload = async (file: File) => {
-    if (!profile?.shop_id) return
-    setLogoError(null)
-    if (!file.type.startsWith('image/')) {
-      setLogoError('Please choose an image file.')
-      return
-    }
-    if (file.size > 3 * 1024 * 1024) {
-      setLogoError('Logo must be under 3 MB.')
-      return
-    }
-    setLogoUploading(true)
-    const ext = file.name.split('.').pop()?.toLowerCase() || 'png'
-    const path = `shop-${profile.shop_id}/logo-${Date.now()}.${ext}`
-    const { error: uploadError } = await supabase.storage.from('shop-logos').upload(path, file, { upsert: true })
-    if (uploadError) {
-      setLogoError('Upload failed. Please try again.')
-      setLogoUploading(false)
-      return
-    }
-    const publicUrl = supabase.storage.from('shop-logos').getPublicUrl(path).data.publicUrl
-    const { error: updateError } = await supabase.from('shops').update({ logo_url: publicUrl }).eq('id', profile.shop_id)
-    if (updateError) {
-      setLogoError('Could not save your logo. Please try again.')
-      setLogoUploading(false)
-      return
-    }
-    setLogoUrl(publicUrl)
-    setLogoUploading(false)
-  }
-
-  const handleRemoveLogo = async () => {
-    if (!profile?.shop_id) return
-    setLogoUploading(true)
-    const { error } = await supabase.from('shops').update({ logo_url: null }).eq('id', profile.shop_id)
-    if (!error) setLogoUrl(null)
-    setLogoUploading(false)
   }
 
   const handleTogglePublish = async (vehicle: Vehicle) => {
@@ -257,62 +214,6 @@ export default function ShopVehicles() {
             ))}
           </div>
         )}
-
-        {/* Branding / Logo */}
-        <div className="mt-8 bg-white rounded-xl border border-zinc-200 p-5">
-          <div className="flex items-center gap-2 mb-1">
-            <ImageIcon size={18} className="text-zinc-500" />
-            <h2 className="text-lg font-bold text-zinc-900">Shop Logo</h2>
-          </div>
-          <p className="text-sm text-zinc-500 mb-4">
-            Upload your logo. It appears on your customer building page and here in your dashboard.
-          </p>
-          <div className="flex items-center gap-5">
-            <div className="w-28 h-28 rounded-xl border border-zinc-200 bg-zinc-50 flex items-center justify-center overflow-hidden flex-shrink-0">
-              {logoUrl ? (
-                <img src={logoUrl} alt="Shop logo" className="w-full h-full object-contain" />
-              ) : (
-                <ImageIcon size={28} className="text-zinc-300" />
-              )}
-            </div>
-            <div className="min-w-0">
-              {readOnly ? (
-                <p className="text-sm text-zinc-500">Your trial has expired. Upgrade to change your logo.</p>
-              ) : (
-              <div className="flex flex-wrap items-center gap-2">
-                <label className={`flex items-center gap-2 text-sm font-medium rounded-lg px-4 py-2 transition-colors cursor-pointer ${
-                  logoUploading ? 'bg-zinc-100 text-zinc-400 cursor-not-allowed' : 'bg-zinc-900 hover:bg-zinc-800 text-white'
-                }`}>
-                  <Upload size={14} />
-                  {logoUploading ? 'Uploading…' : logoUrl ? 'Replace Logo' : 'Upload Logo'}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    disabled={logoUploading}
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0]
-                      if (file) handleLogoUpload(file)
-                      e.target.value = ''
-                    }}
-                  />
-                </label>
-                {logoUrl && !logoUploading && (
-                  <button
-                    onClick={handleRemoveLogo}
-                    className="flex items-center gap-1.5 text-sm font-medium text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 rounded-lg px-3 py-2 transition-colors"
-                  >
-                    <Trash2 size={14} />
-                    Remove
-                  </button>
-                )}
-              </div>
-              )}
-              <p className="text-xs text-zinc-400 mt-2">PNG or JPG, up to 3 MB. A transparent PNG looks best.</p>
-              {logoError && <p className="text-sm text-red-600 mt-1">{logoError}</p>}
-            </div>
-          </div>
-        </div>
 
         {/* Shipping Rates Config */}
         <div className="mt-8 bg-white rounded-xl border border-zinc-200 p-5">
