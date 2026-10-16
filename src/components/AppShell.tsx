@@ -5,7 +5,24 @@ import { supabase } from '../lib/supabase'
 import { ShopBillingProvider, computeBilling, DEFAULT_BILLING, type ShopBillingState } from '../lib/billing'
 import { disablePushOnThisDevice, syncPushSubscription } from '../lib/notifications'
 import NotificationBell from './NotificationBell'
-import { LogOut, LayoutDashboard, Users, Shield, Car, Menu, X, AlertTriangle, Clock, CalendarDays, Bell } from 'lucide-react'
+import { LogOut, LayoutDashboard, Users, Shield, Car, Menu, X, AlertTriangle, Clock, CalendarDays, Bell, Settings, type LucideIcon } from 'lucide-react'
+
+function NavButton({ item, active, onClick }: { item: { label: string; icon: LucideIcon }; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-current={active ? 'page' : undefined}
+      className={
+        active
+          ? 'w-full flex items-center gap-3 bg-cobalt-500/10 text-cobalt-400 border-l-2 border-cobalt-500 font-semibold px-3 py-2.5 rounded-r-xl text-sm shadow-glow-blue transition-colors'
+          : 'w-full flex items-center gap-3 text-slate-400 hover:text-white hover:bg-white/5 rounded-xl px-3 py-2.5 font-medium text-sm transition-colors'
+      }
+    >
+      <item.icon size={18} />
+      {item.label}
+    </button>
+  )
+}
 
 export default function AppShell() {
   const { profile, signOut } = useAuth()
@@ -59,6 +76,8 @@ export default function AppShell() {
         { label: 'Vehicles', path: '/dashboard/vehicles', icon: Car },
         { label: 'Notifications', path: '/dashboard/notifications', icon: Bell },
       ]
+  // Shown apart from the daily navigation.
+  const secondaryNavItems = isAdmin ? [] : [{ label: 'Settings', path: '/dashboard/settings', icon: Settings }]
 
   const isActive = (path: string) =>
     path === '/admin'
@@ -67,7 +86,7 @@ export default function AppShell() {
         ? location.pathname === '/dashboard'
         : location.pathname.startsWith(path)
 
-  const activeItem = navItems.find((item) => isActive(item.path))
+  const activeItem = [...navItems, ...secondaryNavItems].find((item) => isActive(item.path))
   const headerTitle = activeItem?.label ?? (isAdmin ? 'Admin Console' : 'Dashboard')
   const badgeLabel = isAdmin ? 'Admin Console' : shopName ?? 'Shop CRM'
 
@@ -124,19 +143,15 @@ export default function AppShell() {
 
           <nav className="py-4 px-3 space-y-1">
             {navItems.map((item) => (
-              <button
-                key={item.path}
-                onClick={() => navigateTo(item.path)}
-                className={
-                  isActive(item.path)
-                    ? 'w-full flex items-center gap-3 bg-cobalt-500/10 text-cobalt-400 border-l-2 border-cobalt-500 font-semibold px-3 py-2.5 rounded-r-xl text-sm shadow-glow-blue transition-colors'
-                    : 'w-full flex items-center gap-3 text-slate-400 hover:text-white hover:bg-white/5 rounded-xl px-3 py-2.5 font-medium text-sm transition-colors'
-                }
-              >
-                <item.icon size={18} />
-                {item.label}
-              </button>
+              <NavButton key={item.path} item={item} active={isActive(item.path)} onClick={() => navigateTo(item.path)} />
             ))}
+            {secondaryNavItems.length > 0 && (
+              <div className="pt-3 mt-3 border-t border-white/5 space-y-1">
+                {secondaryNavItems.map((item) => (
+                  <NavButton key={item.path} item={item} active={isActive(item.path)} onClick={() => navigateTo(item.path)} />
+                ))}
+              </div>
+            )}
           </nav>
         </div>
 

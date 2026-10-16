@@ -7,9 +7,7 @@ import StatusSelect from '../components/StatusSelect'
 import { useShopBilling } from '../lib/billing'
 import { LoadingScreen } from '../components/LoadingScreen'
 import { formatDateOnly } from '../lib/scheduleDates'
-import { Search, Inbox, Send, ThumbsUp, Clock, CheckCircle2, Mail, Phone, MapPin, ChevronRight, ChevronDown, MessageSquare, Link2, Copy, Check, ExternalLink, PartyPopper, X, CalendarDays, type LucideIcon } from 'lucide-react'
-
-const PUBLIC_QUOTE_ORIGIN = 'https://quotes.specplus.app'
+import { Search, Inbox, Send, ThumbsUp, Clock, CheckCircle2, Mail, Phone, MapPin, ChevronRight, ChevronDown, MessageSquare, PartyPopper, X, CalendarDays, type LucideIcon } from 'lucide-react'
 
 type WorkflowFilter = WorkflowStatus | 'all'
 
@@ -45,50 +43,6 @@ export default function ShopDashboard() {
   const [bookedStarts, setBookedStarts] = useState<Map<string, string>>(new Map())
   const [statusError, setStatusError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
-  const [copied, setCopied] = useState(false)
-  const [shopSlug, setShopSlug] = useState<string | null>(null)
-
-  const customerLink = profile?.shop_id
-    ? shopSlug
-      ? `${PUBLIC_QUOTE_ORIGIN}/${shopSlug}`
-      : `${PUBLIC_QUOTE_ORIGIN}/customize/${profile.shop_id}`
-    : ''
-
-  const copyLink = async () => {
-    if (!customerLink) return
-    try {
-      await navigator.clipboard.writeText(customerLink)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      setCopied(false)
-    }
-  }
-
-  useEffect(() => {
-    if (!profile?.shop_id) {
-      setShopSlug(null)
-      return
-    }
-
-    let active = true
-    supabase
-      .from('shops')
-      .select('slug')
-      .eq('id', profile.shop_id)
-      .maybeSingle()
-      .then(({ data, error }) => {
-        if (!active) return
-        if (error) {
-          console.error('Failed to load shop slug:', error.message)
-          setShopSlug(null)
-        } else {
-          setShopSlug((data?.slug as string | null) ?? null)
-        }
-      })
-
-    return () => { active = false }
-  }, [profile?.shop_id])
 
   useEffect(() => {
     if (showWelcome) {
@@ -222,7 +176,7 @@ export default function ShopDashboard() {
             </h1>
             <p className="text-sm text-slate-400 mt-2 leading-relaxed">
               Your account isn't linked to a shop yet. Once your shop is set up you'll see your
-              customer leads and shareable customizer link right here.
+              customer leads here and your shareable customizer link in Settings.
             </p>
             <p className="text-xs text-slate-500 mt-4">
               Reach out to your SpecPlus administrator to finish setting up your shop.
@@ -260,7 +214,11 @@ export default function ShopDashboard() {
             <div className="flex-1">
               <h2 className="text-sm font-semibold text-emerald-200">Welcome to SpecPlus{profile?.full_name ? `, ${profile.full_name.split(' ')[0]}` : ''}!</h2>
               <p className="text-xs text-emerald-300/80 mt-1 leading-relaxed">
-                Your shop account is ready. Share your customer link below to start collecting quote requests, then add your vehicles to build them out.
+                Your shop account is ready. Copy your customer link from{' '}
+                <button onClick={() => navigate('/dashboard/settings')} className="font-semibold text-emerald-200 underline hover:text-white">
+                  Settings
+                </button>{' '}
+                to start collecting quote requests, then add your vehicles to build them out.
               </p>
             </div>
             <button
@@ -272,44 +230,6 @@ export default function ShopDashboard() {
             </button>
           </div>
         )}
-
-        {/* Shareable customer link */}
-        <div className="bg-obsidian-900/50 border border-white/10 rounded-2xl p-4 mb-6">
-          <div className="flex items-center gap-2 mb-2">
-            <Link2 size={16} className="text-cobalt-400" />
-            <h2 className="text-sm font-semibold text-slate-100">Your customer link</h2>
-          </div>
-          <p className="text-xs text-slate-400 mb-3">
-            Share this link with customers so they can build a quote. It opens your vehicle customizer.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-2">
-            <input
-              type="text"
-              readOnly
-              value={customerLink}
-              onFocus={(e) => e.target.select()}
-              className="flex-1 bg-obsidian-950/80 border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-300 font-mono focus:outline-none focus:border-cobalt-500/50"
-            />
-            <div className="flex gap-2">
-              <button
-                onClick={copyLink}
-                className="flex items-center justify-center gap-2 bg-cobalt-600 hover:bg-cobalt-500 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
-              >
-                {copied ? <Check size={16} /> : <Copy size={16} />}
-                {copied ? 'Copied' : 'Copy'}
-              </button>
-              <a
-                href={customerLink}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center justify-center gap-2 bg-obsidian-900/60 border border-white/10 hover:bg-white/5 text-slate-300 text-sm font-medium rounded-lg px-4 py-2 transition-colors"
-              >
-                <ExternalLink size={16} />
-                Open
-              </a>
-            </div>
-          </div>
-        </div>
 
         {/* Stats cards */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
