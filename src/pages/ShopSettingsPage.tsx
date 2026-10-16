@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, Building2, Check, Copy, ExternalLink, Image as ImageIcon, Link2, Mail, Phone, Settings, Trash2, Upload } from 'lucide-react'
+import { AlertCircle, Building2, Check, Copy, ExternalLink, Image as ImageIcon, Link2, Mail, Pencil, Phone, Settings, Trash2, Upload } from 'lucide-react'
 import { useAuth } from '../lib/auth'
 import { useShopBilling } from '../lib/billing'
 import { supabase } from '../lib/supabase'
 import { LoadingScreen } from '../components/LoadingScreen'
 import { copyText, customerLinkFor, publicQuoteOrigin } from '../lib/customerLink'
 import { removeShopLogo, uploadShopLogo, type LogoResult } from '../lib/shopLogo'
+import {
+  EMAIL_MAX, NAME_MAX, PHONE_MAX, announceShopDetailsChange, changedFields, draftFrom, validateShopDetails, type ShopDetailsDraft,
+} from '../lib/shopDetails'
 
 type ShopDetails = {
   id: string
@@ -92,6 +95,7 @@ export default function ShopSettingsPage() {
             <ShopDetailsCard
               shop={state.shop}
               onLogoChange={(logoUrl) => setState((s) => (s.status === 'ready' ? { ...s, shop: { ...s.shop, logo_url: logoUrl } } : s))}
+              onSaved={(shop) => setState({ status: 'ready', shop })}
             />
             <QuoteRequestsCard link={customerLinkFor(PUBLIC_QUOTE_ORIGIN, state.shop)} />
           </>
@@ -101,28 +105,146 @@ export default function ShopSettingsPage() {
   )
 }
 
-function ShopDetailsCard({ shop, onLogoChange }: { shop: ShopDetails; onLogoChange: (logoUrl: string | null) => void }) {
+const SHOP_FIELDS = 'id, name, slug, logo_url, contact_email, phone'
+const inputClass = 'w-full bg-obsidian-950/80 border rounded-lg px-3 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-cobalt-500/60 placeholder:text-slate-600'
+
+function ShopDetailsCard({ shop, onLogoChange, onSaved }: {
+  shop: ShopDetails
+  onLogoChange: (logoUrl: string | null) => void
+  onSaved: (shop: ShopDetails) => void
+}) {
+  const { readOnly } = useShopBilling()
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState<ShopDetailsDraft>(() => draftFrom(shop))
+  const [touched, setTouched] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
+  const savedTimer = useRef<number>()
+  useEffect(() => () => window.clearTimeout(savedTimer.current), [])
+
+  const original = draftFrom(shop)
+  const errors = validateShopDetails(draft)
+  const changes = changedFields(original, draft)
+  const hasChanges = Object.keys(changes).length > 0
+  const valid = Object.keys(errors).length === 0
+
+  const startEdit = () => {
+    setDraft(draftFrom(shop))
+    setTouched(false)
+    setSaveError(null)
+    setSaved(false)
+    setEditing(true)
+  }
+  const cancel = () => {
+    setDraft(draftFrom(shop))
+    setSaveError(null)
+    setEditing(false)
+  }
+  const save = async () => {
+    setTouched(true)
+    if (!valid || !hasChanges || saving) return
+    setSaving(true)
+    setSaveError(null)
+    try {
+      // Only the edited columns; reading the row back confirms RLS really
+      // applied the update (a blocked update returns no row, not an error).
+      const { data, error } = await supabase.from('shops').update(changes).eq('id', shop.id).select(SHOP_FIELDS).maybeSingle()
+      if (error) throw new Error(error.message)
+      if (!data) throw new Error('Your changes were not saved. Please try again.')
+      const next = data as ShopDetails
+      onSaved(next)
+      announceShopDetailsChange({ shopId: next.id, name: next.name })
+      setEditing(false)
+      setSaved(true)
+      window.clearTimeout(savedTimer.current)
+      savedTimer.current = window.setTimeout(() => setSaved(false), 3000)
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Could not save your changes. Please try again.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const field = (key: keyof ShopDetailsDraft) => ({
+    value: draft[key],
+    disabled: saving,
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => setDraft((d) => ({ ...d, [key]: e.target.value })),
+    onBlur: () => setTouched(true),
+    'aria-invalid': touched && errors[key] ? true : undefined,
+    className: `${inputClass} ${touched && errors[key] ? 'border-red-500/50' : 'border-white/10'}`,
+  })
+  const fieldError = (key: keyof ShopDetailsDraft) =>
+    touched && errors[key] ? <p className="text-xs text-red-300 mt-1">{errors[key]}</p> : null
+
   return (
     <section className={card}>
-      <h2 className="text-sm font-semibold text-slate-100 flex items-center gap-2">
-        <Building2 size={16} className="text-cobalt-400" /> Shop details
-      </h2>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-slate-100 flex items-center gap-2">
+          <Building2 size={16} className="text-cobalt-400" /> Shop details
+        </h2>
+        {!editing && !readOnly && (
+          <button onClick={startEdit} className="flex items-center gap-1.5 text-sm font-medium text-slate-200 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg px-3 py-1.5 transition-colors">
+            <Pencil size={14} /> Edit
+          </button>
+        )}
+      </div>
       <div className="mt-4 flex flex-col sm:flex-row gap-5">
         <ShopLogo shop={shop} onLogoChange={onLogoChange} />
-        <dl className="min-w-0 flex-1 grid gap-3 text-sm">
-          <div>
-            <dt className="text-xs text-slate-500">Shop name</dt>
-            <dd className="text-slate-100 font-medium break-words">{shop.name}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-slate-500 flex items-center gap-1"><Mail size={12} /> Contact email</dt>
-            <dd className="text-slate-200 break-all">{shop.contact_email?.trim() || <span className="text-slate-500">Not provided</span>}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-slate-500 flex items-center gap-1"><Phone size={12} /> Phone</dt>
-            <dd className="text-slate-200">{shop.phone?.trim() || <span className="text-slate-500">Not provided</span>}</dd>
-          </div>
-        </dl>
+        {editing ? (
+          <form
+            className="min-w-0 flex-1 grid gap-3 text-sm"
+            noValidate
+            onSubmit={(e) => { e.preventDefault(); save() }}
+          >
+            <label className="block">
+              <span className="text-xs text-slate-500">Shop name</span>
+              <input {...field('name')} type="text" autoComplete="organization" maxLength={NAME_MAX} required />
+              {fieldError('name')}
+            </label>
+            <label className="block">
+              <span className="text-xs text-slate-500 flex items-center gap-1"><Mail size={12} /> Contact email</span>
+              <input {...field('contact_email')} type="email" inputMode="email" autoComplete="email" autoCapitalize="none" spellCheck={false} maxLength={EMAIL_MAX} required />
+              {fieldError('contact_email')}
+              <span className="block text-[11px] text-slate-500 mt-1">New-request and customer-message notification emails are sent here.</span>
+            </label>
+            <label className="block">
+              <span className="text-xs text-slate-500 flex items-center gap-1"><Phone size={12} /> Phone <span className="text-slate-600">(optional)</span></span>
+              <input {...field('phone')} type="tel" inputMode="tel" autoComplete="tel" maxLength={PHONE_MAX} />
+              {fieldError('phone')}
+            </label>
+            {saveError && (
+              <p className="flex items-start gap-2 text-xs text-red-200 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2" role="alert">
+                <AlertCircle size={14} className="mt-0.5 flex-shrink-0" /> {saveError}
+              </p>
+            )}
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-1">
+              <button type="button" onClick={cancel} disabled={saving} className="flex items-center justify-center text-sm font-medium text-slate-300 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg px-4 py-2.5 transition-colors disabled:opacity-50">
+                Cancel
+              </button>
+              <button type="submit" disabled={saving || !hasChanges || (touched && !valid)} className="flex items-center justify-center gap-2 text-sm font-semibold text-white bg-cobalt-600 hover:bg-cobalt-500 rounded-lg px-4 py-2.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                {saving ? 'Saving…' : 'Save changes'}
+              </button>
+            </div>
+          </form>
+        ) : (
+          <dl className="min-w-0 flex-1 grid gap-3 text-sm content-start">
+            <div>
+              <dt className="text-xs text-slate-500">Shop name</dt>
+              <dd className="text-slate-100 font-medium break-words">{shop.name}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-slate-500 flex items-center gap-1"><Mail size={12} /> Contact email</dt>
+              <dd className="text-slate-200 break-all">{shop.contact_email?.trim() || <span className="text-slate-500">Not provided</span>}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-slate-500 flex items-center gap-1"><Phone size={12} /> Phone</dt>
+              <dd className="text-slate-200">{shop.phone?.trim() || <span className="text-slate-500">Not provided</span>}</dd>
+            </div>
+            {saved && <p className="text-xs text-emerald-300" aria-live="polite">Shop details saved.</p>}
+            {readOnly && <p className="text-xs text-slate-500">Your trial has expired. Upgrade to change your shop details.</p>}
+          </dl>
+        )}
       </div>
     </section>
   )

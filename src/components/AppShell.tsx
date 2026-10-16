@@ -6,6 +6,7 @@ import { ShopBillingProvider, computeBilling, DEFAULT_BILLING, type ShopBillingS
 import { disablePushOnThisDevice, syncPushSubscription } from '../lib/notifications'
 import NotificationBell from './NotificationBell'
 import { onShopLogoChange } from '../lib/shopLogo'
+import { onShopDetailsChange } from '../lib/shopDetails'
 import { LogOut, LayoutDashboard, Users, Shield, Car, Menu, X, AlertTriangle, Clock, CalendarDays, Bell, Settings, type LucideIcon } from 'lucide-react'
 
 function NavButton({ item, active, onClick }: { item: { label: string; icon: LucideIcon }; active: boolean; onClick: () => void }) {
@@ -57,9 +58,14 @@ export default function AppShell() {
   useEffect(() => {
     if (isAdmin || !profile?.shop_id) return
     const shopId = profile.shop_id
-    return onShopLogoChange((change) => {
+    const stopLogo = onShopLogoChange((change) => {
       if (change.shopId === shopId) setShopLogo(change.logoUrl)
     })
+    // Likewise for the shop name edited in Settings.
+    const stopDetails = onShopDetailsChange((change) => {
+      if (change.shopId === shopId) setShopName(change.name)
+    })
+    return () => { stopLogo(); stopDetails() }
   }, [isAdmin, profile?.shop_id])
 
   // Keep this browser's push subscription attached to whoever is signed in.
