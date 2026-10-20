@@ -5,7 +5,7 @@ import {
   QUOTE_STATUS_META, formatQuoteDate, isQuoteExpired, leadBuildDiffersFromQuote, normalizeQuote, openDraftQuote,
   partsNeedingPrice, customerQuoteUrl, staffPreviewUrl, MESSAGE_MAX_LENGTH,
 } from '../lib/quotes'
-import { describeFollowUpResult, followUpAvailability, followUpPrefill, FollowUpOutcome, FollowUpResult } from '../lib/quoteFollowUp'
+import { activeCustomerQuote, describeFollowUpResult, followUpAvailability, followUpPrefill, FollowUpOutcome, FollowUpResult } from '../lib/quoteFollowUp'
 import { AlertCircle, BellRing, Check, Copy, ExternalLink, FileText, Loader2, Pencil, RefreshCw, Send } from 'lucide-react'
 
 export default function LeadQuoteCard({ lead, readOnly, onFollowUpSent }: { lead: Lead; readOnly: boolean; onFollowUpSent?: () => void }) {
@@ -16,6 +16,9 @@ export default function LeadQuoteCard({ lead, readOnly, onFollowUpSent }: { lead
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  // The quote the customer has now. Differs from `latest` while a newer
+  // revision is still an unsent draft; follow-ups always target this one.
+  const [activeQuote, setActiveQuote] = useState<Quote | null>(null)
   const [lastFollowUpAt, setLastFollowUpAt] = useState<string | null>(null)
   // Follow-up composer. requestId stays the same across retries of one
   // follow-up so the server can recognize a repeated send.
@@ -36,6 +39,7 @@ export default function LeadQuoteCard({ lead, readOnly, onFollowUpSent }: { lead
         if (loadError) console.error('Failed to load quotes:', loadError.message)
         const rows = ((data ?? []) as Quote[]).map(normalizeQuote)
         setLatest(rows[0] ?? null)
+        setActiveQuote(activeCustomerQuote(rows))
         setRevisionCount(rows.length)
         setLoading(false)
       })
@@ -93,8 +97,10 @@ export default function LeadQuoteCard({ lead, readOnly, onFollowUpSent }: { lead
   }
 
   // Follow-ups apply to the customer's current quote while they haven't answered it.
-  const canFollowUp = !!latest && !readOnly && (latest.status === 'sent' || latest.status === 'viewed') && !latest.superseded_at
-  const followUpState = latest ? followUpAvailability(latest, lastFollowUpAt) : null
+  const followUpQuote = activeQuote && (activeQuote.status === 'sent' || activeQuote.status === 'viewed') ? activeQuote : null
+  const canFollowUp = !!followUpQuote && !readOnly
+  const followUpState = followUpQuote ? followUpAvailability(followUpQuote, lead.status, lastFollowUpAt) : null
+  const draftPending = !!followUpQuote && latest?.status === 'draft'
 
   const openFollowUp = () => {
     setFollowUpError(null)
@@ -108,23 +114,31 @@ export default function LeadQuoteCard({ lead, readOnly, onFollowUpSent }: { lead
   }
 
   const sendFollowUp = async () => {
-    if (!latest || !followUp || followUpSending) return
+    if (!followUpQuote || !followUp || followUpSending) return
     const body = followUp.body.trim()
     if (!body) return
     setFollowUpSending(true)
     setFollowUpError(null)
-    const { data, error: rpcError } = await supabase.rpc('send_quote_follow_up', {
-      p_quote_id: latest.id,
-      p_body: body,
-      p_request_id: followUp.requestId,
-    })
-    setFollowUpSending(false)
-    if (rpcError || !data) {
-      // Keep the draft and its request id: a retry can't post it twice.
-      setFollowUpError(rpcError?.message || 'Could not send the follow-up. Try again.')
+    // On any failure the composer keeps the draft and its request id, so a
+    // retry can't post the follow-up twice.
+    let outcome: FollowUpOutcome
+    try {
+      const { data, error: rpcError } = await supabase.rpc('send_quote_follow_up', {
+        p_quote_id: followUpQuote.id,
+        p_body: body,
+        p_request_id: followUp.requestId,
+      })
+      if (rpcError || !data) {
+        setFollowUpError(rpcError?.message || 'Could not send the follow-up. Try again.')
+        return
+      }
+      outcome = describeFollowUpResult(data as FollowUpResult, formatDateTime)
+    } catch (err) {
+      setFollowUpError(err instanceof Error && err.message ? err.message : 'Could not send the follow-up. Try again.')
       return
+    } finally {
+      setFollowUpSending(false)
     }
-    const outcome = describeFollowUpResult(data as FollowUpResult, formatDateTime)
     if (!outcome.posted) {
       setFollowUpError(outcome.message)
       loadLastFollowUp()
@@ -132,7 +146,7 @@ export default function LeadQuoteCard({ lead, readOnly, onFollowUpSent }: { lead
     }
     setFollowUp(null)
     setFollowUpOutcome(outcome)
-    await loadLastFollowUp()
+    loadLastFollowUp()
     onFollowUpSent?.()
   }
 
@@ -196,7 +210,7 @@ export default function LeadQuoteCard({ lead, readOnly, onFollowUpSent }: { lead
             <Stat label="Views" value={String(latest.view_count)} />
             {latest.approved_at && <Stat label="Approved" value={formatDateTime(latest.approved_at)} />}
             {latest.declined_at && <Stat label="Declined" value={formatDateTime(latest.declined_at)} />}
-            {latest.status !== 'draft' && <Stat label="Last follow-up" value={lastFollowUpAt ? formatDateTime(lastFollowUpAt) : '—'} />}
+            {(followUpQuote || lastFollowUpAt) && <Stat label="Last follow-up" value={lastFollowUpAt ? formatDateTime(lastFollowUpAt) : '—'} />}
           </div>
 
           {buildChanged && (
@@ -234,17 +248,18 @@ export default function LeadQuoteCard({ lead, readOnly, onFollowUpSent }: { lead
                   <ExternalLink size={15} />
                   Preview
                 </a>
-                {canFollowUp && (
-                  <button
-                    onClick={openFollowUp}
-                    disabled={!followUpState?.available || !!followUp}
-                    className={`${btnSecondary} disabled:opacity-60 disabled:cursor-not-allowed`}
-                  >
-                    <BellRing size={15} />
-                    Follow up
-                  </button>
-                )}
               </>
+            )}
+            {/* Targets the customer's active quote, even while a newer revision is still a draft. */}
+            {canFollowUp && (
+              <button
+                onClick={openFollowUp}
+                disabled={!followUpState?.available || !!followUp}
+                className={`${btnSecondary} disabled:opacity-60 disabled:cursor-not-allowed`}
+              >
+                <BellRing size={15} />
+                {draftPending ? `Follow up on Quote #${followUpQuote!.revision_number}` : 'Follow up'}
+              </button>
             )}
           </div>
 
@@ -254,7 +269,9 @@ export default function LeadQuoteCard({ lead, readOnly, onFollowUpSent }: { lead
                 ? `One follow-up every 24 hours. Next follow-up available ${formatDateTime(followUpState.nextAllowedAt.toISOString())}.`
                 : followUpState.reason === 'expired'
                   ? 'This quote has expired. Revise the quote to send new terms instead of following up.'
-                  : 'This quote can no longer be followed up.'}
+                  : followUpState.reason === 'lead_closed'
+                    ? "Follow-ups aren't available for completed or lost leads."
+                    : 'This quote can no longer be followed up.'}
             </p>
           )}
 
@@ -262,7 +279,7 @@ export default function LeadQuoteCard({ lead, readOnly, onFollowUpSent }: { lead
             <div className="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 p-4">
               <p className="text-sm font-medium text-zinc-900">Follow up with {lead.customer_name}</p>
               <p className="text-xs text-zinc-500 mt-0.5 mb-3">
-                Posts to the quote conversation. The customer gets an email alert with a link to read and reply on their quote.
+                Posts to the conversation on Quote #{followUpQuote?.revision_number} and queues an email alert with a link for the customer to read and reply on their quote.
               </p>
               <textarea
                 value={followUp.body}

@@ -21,11 +21,20 @@ migrations (not edited).
      scheduling rule (schedule_shop_is_read_only).
    - Eligibility: the quote must be sent or viewed, not superseded and not
      expired (same expiry rule as respond_to_quote). Approved, declined and
-     draft quotes cannot be followed up.
+     draft quotes cannot be followed up, and neither can completed or lost
+     leads.
    - Cooldown: at most one follow-up per lead per 24 hours.
-   - Duplicates: a per-lead advisory lock serializes concurrent sends; a
-     retried request with the same request_id returns the original message
-     instead of posting again (also enforced by a unique index).
+   - Locking: the quote row (FOR UPDATE), then the lead row (FOR NO KEY
+     UPDATE) -- the same quote-then-lead order as mark_quote_sent,
+     respond_to_quote and record_quote_view, whose triggers update the lead
+     after the quote. Approval, sending a revision (which supersedes this
+     quote) and lead status changes therefore either finish first or wait
+     for the follow-up to commit; eligibility is read only after both locks
+     are held, so it reflects whatever finished first. The lead lock also
+     serializes follow-ups per lead for the cooldown.
+   - Duplicates: a retried request with the same request_id returns the
+     original message instead of posting again (checked under the locks and
+     enforced by a unique index).
    - Never changes the quote (status, pricing, view tracking) or the schedule.
    - Returns the posted message and, separately, whether the customer email
      alert was queued, so the app can report posting and alerting distinctly.
@@ -101,6 +110,7 @@ DECLARE
   v_role text;
   v_shop uuid;
   v_quote public.quotes%ROWTYPE;
+  v_lead public.leads%ROWTYPE;
   v_body text := btrim(coalesce(p_body, ''));
   v_existing public.quote_messages%ROWTYPE;
   v_last timestamptz;
@@ -126,10 +136,14 @@ BEGIN
       USING ERRCODE = 'insufficient_privilege';
   END IF;
 
-  -- One follow-up decision per lead at a time.
-  PERFORM pg_advisory_xact_lock(hashtextextended('specplus.quote_follow_up:' || v_quote.lead_id::text, 0));
+  -- Quote, then lead: the lifecycle order (see header). Each lock waits for
+  -- any in-flight approval, revision send or status change to commit, and
+  -- returns the row as it is afterwards.
+  SELECT * INTO v_quote FROM public.quotes q WHERE q.id = p_quote_id FOR UPDATE;
+  SELECT * INTO v_lead FROM public.leads l WHERE l.id = v_quote.lead_id FOR NO KEY UPDATE;
 
-  -- A retried request returns what it already posted.
+  -- A retried request returns what it already posted, even if the quote has
+  -- since become ineligible.
   IF p_request_id IS NOT NULL THEN
     SELECT * INTO v_existing FROM public.quote_messages m WHERE m.follow_up_request_id = p_request_id;
     IF FOUND THEN
@@ -145,8 +159,10 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'error', 'invalid_message');
   END IF;
 
-  -- Re-read under the lock so eligibility reflects any concurrent approval or revision.
-  SELECT * INTO v_quote FROM public.quotes q WHERE q.id = p_quote_id;
+  -- Eligibility, from the locked rows.
+  IF v_lead.status IN ('completed', 'lost') THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'not_eligible', 'reason', 'lead_' || v_lead.status);
+  END IF;
   IF v_quote.status NOT IN ('sent', 'viewed') THEN
     RETURN jsonb_build_object('ok', false, 'error', 'not_eligible', 'reason', v_quote.status);
   END IF;
@@ -171,7 +187,7 @@ BEGIN
 
   -- The message is posted at this point. Report the alert separately: the
   -- notification trigger never blocks the message, so it may not have queued.
-  SELECT btrim(coalesce(l.customer_email, '')) INTO v_customer_email FROM public.leads l WHERE l.id = v_quote.lead_id;
+  v_customer_email := btrim(coalesce(v_lead.customer_email, ''));
   IF EXISTS (
     SELECT 1
     FROM public.lead_events le

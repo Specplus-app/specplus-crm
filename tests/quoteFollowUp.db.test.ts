@@ -359,3 +359,93 @@ test('customers cannot create follow-ups and follow-up flags stay consistent', a
   // A customer message during the cooldown is unaffected; the shop can still follow up.
   assert.equal((await followUp('a1', q.id)).ok, true)
 })
+
+// ---------------------------------------------------------------------------
+// Review regressions
+// ---------------------------------------------------------------------------
+
+const setLeadStatus = (leadId: string, status: string, userKey = 'a1') =>
+  as(db, staff(userKey), async (tx: any) => tx.query(`UPDATE leads SET status = $2 WHERE id = $1`, [leadId, status]))
+
+for (const status of ['completed', 'lost']) {
+  test(`${status} leads cannot be followed up: no message, event or alert`, async () => {
+    const lead = await newLead('shopA')
+    const q = await sentQuote(lead)
+    await setLeadStatus(lead, status)
+    const before = {
+      messages: (await db.query(`SELECT count(*)::int AS n FROM quote_messages WHERE lead_id = $1`, [lead])).rows[0].n,
+      events: (await db.query(`SELECT count(*)::int AS n FROM lead_events WHERE lead_id = $1`, [lead])).rows[0].n,
+      notificationEvents: (await db.query(`SELECT count(*)::int AS n FROM notification_events WHERE lead_id = $1`, [lead])).rows[0].n,
+      deliveries: (await db.query(`SELECT count(*)::int AS n FROM notification_deliveries d JOIN notification_events e ON e.id = d.event_id WHERE e.lead_id = $1`, [lead])).rows[0].n,
+    }
+
+    for (const who of ['a1', 'admin']) {
+      assert.deepEqual(await followUp(who, q.id, 'Checking in', crypto.randomUUID()),
+        { ok: false, error: 'not_eligible', reason: `lead_${status}` }, who)
+    }
+
+    assert.deepEqual({
+      messages: (await db.query(`SELECT count(*)::int AS n FROM quote_messages WHERE lead_id = $1`, [lead])).rows[0].n,
+      events: (await db.query(`SELECT count(*)::int AS n FROM lead_events WHERE lead_id = $1`, [lead])).rows[0].n,
+      notificationEvents: (await db.query(`SELECT count(*)::int AS n FROM notification_events WHERE lead_id = $1`, [lead])).rows[0].n,
+      deliveries: (await db.query(`SELECT count(*)::int AS n FROM notification_deliveries d JOIN notification_events e ON e.id = d.event_id WHERE e.lead_id = $1`, [lead])).rows[0].n,
+    }, before)
+    assert.equal((await one(db, `SELECT status FROM quotes WHERE id = $1`, [q.id])).status, 'sent', 'quote untouched')
+  })
+}
+
+test('a lead closed after a follow-up still returns that follow-up on retry, but takes no new ones', async () => {
+  const lead = await newLead('shopA')
+  const q = await sentQuote(lead)
+  const requestId = crypto.randomUUID()
+  const first = await followUp('a1', q.id, 'Checking in', requestId)
+  assert.equal(first.ok, true)
+  await setLeadStatus(lead, 'lost')
+  const retry = await followUp('a1', q.id, 'Checking in', requestId)
+  assert.equal(retry.duplicate, true)
+  assert.equal(retry.message_id, first.message_id)
+  await age(lead, '25 hours')
+  assert.equal((await followUp('a1', q.id, 'Another', crypto.randomUUID())).reason, 'lead_lost')
+  assert.equal((await followUps(lead)).length, 1)
+  assert.equal((await alerts(lead)).length, 1)
+})
+
+test('a newer unsent draft does not block following up on the active sent quote', async () => {
+  const lead = await newLead('shopA')
+  const active = await sentQuote(lead)
+  const draft = await draftQuote(lead, 'a1', { supersedes: active.id })
+  assert.equal(draft.status, 'draft')
+
+  assert.deepEqual(await followUp('a1', draft.id), { ok: false, error: 'not_eligible', reason: 'draft' })
+  const r = await followUp('a1', active.id)
+  assert.equal(r.ok, true)
+  const [msg] = await followUps(lead)
+  assert.equal(msg.quote_id, active.id)
+  const visible = await customerMessages(active.public_token)
+  assert.deepEqual(visible.map((m: any) => m.id), [r.message_id], 'the customer sees it on the quote they have')
+  assert.equal((await one(db, `SELECT status FROM quotes WHERE id = $1`, [draft.id])).status, 'draft', 'draft untouched')
+})
+
+test('eligibility is decided under row locks on the quote and then the lead', async () => {
+  // Rejected after locking (lost lead) so no insert adds its own lead lock:
+  // any lock on the lead row must come from the follow-up itself.
+  const lead = await newLead('shopA')
+  const q = await sentQuote(lead)
+  await setLeadStatus(lead, 'lost')
+  const locks = await as(db, staff('a1'), async (tx: any) => {
+    await tx.query(`SELECT public.send_quote_follow_up($1, 'Checking in', NULL)`, [q.id])
+    return one(tx, `SELECT
+        (SELECT xmax = pg_current_xact_id()::xid FROM quotes WHERE id = $1) AS quote_locked,
+        (SELECT xmax = pg_current_xact_id()::xid FROM leads WHERE id = $2) AS lead_locked`, [q.id, lead])
+  })
+  assert.deepEqual(locks, { quote_locked: true, lead_locked: true })
+
+  // Same order as the existing quote lifecycle (quote row first, then the
+  // lead), and no advisory lock left over from the first version.
+  const def = (await one(db, `SELECT pg_get_functiondef('public.send_quote_follow_up(uuid,text,uuid)'::regprocedure) AS d`)).d as string
+  const quoteLock = def.indexOf('FROM public.quotes q WHERE q.id = p_quote_id FOR UPDATE')
+  const leadLock = def.indexOf('FROM public.leads l WHERE l.id = v_quote.lead_id FOR NO KEY UPDATE')
+  const firstCheck = def.indexOf(`IF v_lead.status IN ('completed', 'lost')`)
+  assert.ok(quoteLock > 0 && leadLock > quoteLock && firstCheck > leadLock, 'locks precede every eligibility check')
+  assert.ok(!def.includes('pg_advisory'))
+})
