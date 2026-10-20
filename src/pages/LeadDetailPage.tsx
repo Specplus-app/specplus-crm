@@ -615,8 +615,8 @@ export default function LeadDetailPage() {
         )}
 
         {/* Custom and preconfigured leads share the customer quote workflow. */}
-        <LeadQuoteCard lead={lead} readOnly={readOnly} />
-        <LeadQuoteConversation lead={lead} readOnly={readOnly} />
+        <LeadQuoteCard lead={lead} readOnly={readOnly} onFollowUpSent={() => setTimelineKey((n) => n + 1)} />
+        <LeadQuoteConversation lead={lead} readOnly={readOnly} refreshKey={timelineKey} />
         <LeadSchedulePanel
           lead={lead}
           readOnly={readOnly}

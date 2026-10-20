@@ -8,7 +8,7 @@ type QuoteRef = { id: string; revision_number: number; status: QuoteStatus; supe
 // Staff view of the customer quote conversation for a lead. Messages
 // stay attached to the revision they were written on; replies always go to the
 // current active sent quote.
-export default function LeadQuoteConversation({ lead, readOnly }: { lead: Lead; readOnly: boolean }) {
+export default function LeadQuoteConversation({ lead, readOnly, refreshKey }: { lead: Lead; readOnly: boolean; refreshKey?: number }) {
   const [quotes, setQuotes] = useState<QuoteRef[]>([])
   const [messages, setMessages] = useState<QuoteMessage[]>([])
   const [names, setNames] = useState<Map<string, string>>(new Map())
@@ -36,9 +36,10 @@ export default function LeadQuoteConversation({ lead, readOnly }: { lead: Lead; 
     }
   }, [lead.id])
 
+  // refreshKey changes when a follow-up is posted from the quote card.
   useEffect(() => {
     load()
-  }, [load])
+  }, [load, refreshKey])
 
   const sentQuotes = quotes.filter((q) => q.status !== 'draft')
   // The customer-visible quote: latest sent revision that has not been superseded.
@@ -91,7 +92,7 @@ export default function LeadQuoteConversation({ lead, readOnly }: { lead: Lead; 
                 <div className={`flex ${fromCustomer ? 'justify-start' : 'justify-end'}`}>
                   <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 ${fromCustomer ? 'bg-zinc-100 text-zinc-800' : 'bg-brand-600 text-white'}`}>
                     <p className={`text-[11px] font-semibold mb-0.5 ${fromCustomer ? 'text-zinc-500' : 'text-brand-100'}`}>
-                      {fromCustomer ? `${sender} (customer)` : sender}
+                      {fromCustomer ? `${sender} (customer)` : m.is_follow_up ? `${sender} · Follow-up` : sender}
                     </p>
                     <p className="text-sm whitespace-pre-wrap break-words leading-relaxed">{m.body}</p>
                     <p className={`text-[10px] mt-1 ${fromCustomer ? 'text-zinc-400' : 'text-brand-100/80'}`}>{formatDateTime(m.created_at)}</p>

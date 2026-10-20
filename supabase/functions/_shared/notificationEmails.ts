@@ -113,14 +113,14 @@ export function renderCustomerEmail(p: CustomerEmailPayload, quoteOrigin: string
   return {
     to: p.to,
     fromName: shop ? `${displayName(shop)} via SpecPlus` : 'SpecPlus',
-    subject: `${shopLabel} replied about your ${vehicle} quote`,
+    subject: `${shopLabel} sent you a message about your ${vehicle} quote`,
     replyTo: EMAIL_RE.test(replyTo) ? replyTo : undefined,
     html: layout(shop || 'SpecPlus', 'You have a new message', [
       `Hi ${escapeHtml(name)},`,
-      `${escapeHtml(shopLabel)} replied to your message about the quote for your <strong style="color:#ffffff;">${escapeHtml(vehicle)}</strong>.`,
-      'Open your quote to read the reply and respond.',
+      `${escapeHtml(shopLabel)} sent you a message about the quote for your <strong style="color:#ffffff;">${escapeHtml(vehicle)}</strong>.`,
+      'Open your quote to read the message and reply.',
     ], { label: 'View message', url }, 'You received this because you requested a quote. Your quote link is private; please do not share it.'),
-    text: `Hi ${name},\n\n${shopLabel} replied to your message about the quote for your ${vehicle}.\n\nView the message: ${url}`,
+    text: `Hi ${name},\n\n${shopLabel} sent you a message about the quote for your ${vehicle}.\n\nView the message: ${url}`,
   }
 }
 

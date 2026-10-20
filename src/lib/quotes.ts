@@ -249,7 +249,9 @@ export function describeLeadEvent(event: LeadEvent): string {
     case 'quote_message_added':
       return m.sender_type === 'customer'
         ? `Customer sent a message on ${rev}`
-        : `Shop replied on ${rev}`
+        : m.follow_up === true
+          ? `Shop followed up on ${rev}`
+          : `Shop replied on ${rev}`
     case 'schedule_options_sent': {
       const dates = Array.isArray(m.start_dates) ? m.start_dates.filter(isDateOnly).map((d) => formatDateOnly(d, { month: 'short', day: 'numeric' })) : []
       return `${m.reschedule ? 'New production dates' : 'Production dates'} offered${dates.length ? `: ${dates.join(', ')}` : ''}`

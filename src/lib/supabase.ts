@@ -266,6 +266,7 @@ export type QuoteMessage = {
   sender_type: QuoteMessageSenderType
   sender_id: string | null
   body: string
+  is_follow_up: boolean
   created_at: string
 }
 

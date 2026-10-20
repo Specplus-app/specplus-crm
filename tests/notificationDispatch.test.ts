@@ -185,7 +185,7 @@ test('preconfigured request and customer message emails also go to the shop', as
   assert.deepEqual(outcomes(), [[pre.delivery_id, 'sent'], [msg.delivery_id, 'sent']])
 })
 
-test("shop reply email goes to the customer with their quote link, never the CRM", async () => {
+test("shop message alert goes to the customer with their quote link, never the CRM", async () => {
   const row = customerEmail()
   queue([row])
   await dispatch()
@@ -193,7 +193,9 @@ test("shop reply email goes to the customer with their quote link, never the CRM
   assert.deepEqual(mail.body.to, ['pat@customer.example.test'])
   assert.equal(mail.body.from, 'Ridge Fab via SpecPlus <quotes@specplus.app>')
   assert.equal(mail.body.reply_to, 'owner@shop.example.test')
-  assert.equal(mail.body.subject, 'Ridge Fab replied about your 2021 Bronco quote')
+  assert.equal(mail.body.subject, 'Ridge Fab sent you a message about your 2021 Bronco quote')
+  assert.ok(mail.body.text.includes('Ridge Fab sent you a message about the quote for your 2021 Bronco.'))
+  assert.ok(!/replied/.test(mail.body.html + mail.body.text), 'wording fits shop-initiated messages too')
   assert.ok(mail.body.html.includes(`https://quotes.example.test/q/${TOKEN}`))
   assert.ok(!mail.body.html.includes('/dashboard/'), 'customers never get CRM links')
   assert.deepEqual(outcomes(), [[row.delivery_id, 'sent']])
