@@ -103,3 +103,11 @@ export async function loadShopCalendar(client: SupabaseClient, shopId: string, r
     return { data: null, error: err instanceof Error ? err.message : 'Network error' }
   }
 }
+
+// The day whose details may be shown: only a day inside the displayed grid,
+// whose rows are the ones loaded. A day left over from another month is
+// dropped, so it can never be paired with this range's data and look empty.
+export function inspectableDay(day: DateOnly | null, gridDays: readonly DateOnly[]): DateOnly | null {
+  if (!day || gridDays.length === 0) return null
+  return day >= gridDays[0] && day <= gridDays[gridDays.length - 1] ? day : null
+}

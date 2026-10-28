@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useShopCalendar } from '../lib/useShopCalendar'
-import { dayDetails, requestsByDay } from '../lib/calendarContext'
+import { dayDetails, inspectableDay, requestsByDay } from '../lib/calendarContext'
 import {
   addMonths, formatDateOnly, formatDateRange, formatMonth, isOnDay, isSameMonth, jobsByDay, monthGridDays, startOfMonth,
   todayDateOnly, type DateOnly,
@@ -28,15 +28,22 @@ export default function ScheduleContextCalendar({ shopId, leadId, mode, initialF
 }) {
   const today = todayDateOnly()
   const [month, setMonth] = useState<DateOnly>(() => startOfMonth(initialFocus))
-  const [day, setDay] = useState<DateOnly | null>(initialFocus)
+  // The inspected day. Cleared on month navigation; offered dates and notes
+  // live in the dialog, so they are unaffected.
+  const [inspected, setDay] = useState<DateOnly | null>(initialFocus)
   const days = useMemo(() => monthGridDays(month), [month])
   // Loads when the dialog opens (fresh data each time) and on month changes.
   const cal = useShopCalendar(shopId, days[0], days[days.length - 1])
   const jobsOn = useMemo(() => jobsByDay(cal.jobs, days), [cal.jobs, days])
   const requestsOn = useMemo(() => requestsByDay(cal.pending, days), [cal.pending, days])
+  // Only a day inside the displayed range, paired with that range's rows.
+  const day = inspectableDay(inspected, days)
   const details = day && cal.loaded ? dayDetails(day, cal.jobs, cal.pending) : null
 
-  const goMonth = (step: number) => setMonth(addMonths(month, step))
+  const goMonth = (step: number) => {
+    setMonth(addMonths(month, step))
+    setDay(null)
+  }
   const navBtn = 'p-1.5 rounded-lg border border-zinc-200 text-zinc-600 hover:bg-zinc-50 disabled:opacity-50'
 
   return (
@@ -113,6 +120,7 @@ export default function ScheduleContextCalendar({ shopId, leadId, mode, initialF
         </div>
       )}
 
+      {!day && <p className="text-xs text-zinc-500 mt-3">Select a day to see its jobs and pending requests.</p>}
       {day && (
         <div className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50 p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">

@@ -3,10 +3,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  MAX_OFFER_DATES, dayDetails, jobPosition, loadShopCalendar, requestsByDay, toggleOfferDate,
+  MAX_OFFER_DATES, dayDetails, inspectableDay, jobPosition, loadShopCalendar, requestsByDay, toggleOfferDate,
 } from '../src/lib/calendarContext.ts'
 import { agendaKey, agendaReducer, initialAgenda } from '../src/lib/agendaState.ts'
 import { validateOfferDates } from '../src/lib/scheduleRules.ts'
+import { monthGridDays } from '../src/lib/scheduleDates.ts'
 
 const job = (id: string, start: string, ready: string, lead_id = `lead-${id}`) => ({ id, lead_id, start_date: start, estimated_ready_date: ready, lead: null })
 const request = (id: string, start: string, lead_id = `lead-${id}`) => ({ id, lead_id, start_date: start, requested_at: '2026-10-20T12:00:00Z', lead: null })
@@ -111,4 +112,34 @@ test('a failed load is reported as an error, never as an empty schedule', async 
   assert.equal(s.loaded, true)
   assert.equal(s.jobs.length, 1, 'refresh failure keeps the last loaded data')
   assert.equal(s.error, 'offline')
+})
+
+test('month navigation never shows an inspected day with another month\'s data', () => {
+  // Grids as the calendar builds them (Monday-start weeks covering the month).
+  const november = monthGridDays('2026-11-01')
+  const december = monthGridDays('2026-12-01')
+  const novemberJobs = [job('booked', '2026-11-09', '2026-11-12')]
+  const decemberJobs = [job('dec', '2026-12-14', '2026-12-16')]
+
+  // Inspect a booked November 10 with November's rows.
+  let day = inspectableDay('2026-11-10', november)
+  assert.equal(day, '2026-11-10')
+  assert.deepEqual(dayDetails(day!, novemberJobs, []).jobs.map((j) => j.id), ['booked'])
+
+  // Navigate to December: the old day is outside the grid, so no details are
+  // computed from December's rows (which would falsely say "no bookings").
+  day = inspectableDay('2026-11-10', december)
+  assert.equal(day, null)
+  assert.deepEqual(dayDetails('2026-11-10', decemberJobs, []).jobs, [], 'what the bug showed: an empty day')
+
+  // Days in the overlapping edge week are still valid in both grids, because
+  // each grid's rows cover its whole displayed range.
+  assert.equal(inspectableDay(december[0], december), december[0])
+  assert.equal(inspectableDay(december.at(-1)!, december), december.at(-1))
+  assert.equal(inspectableDay(null, december), null)
+  assert.equal(inspectableDay('2026-12-10', []), null)
+
+  // Offered dates are dialog state and unaffected by navigation.
+  const offered = toggleOfferDate(toggleOfferDate([], '2026-11-10', '2026-10-27').dates, '2026-12-15', '2026-10-27').dates
+  assert.deepEqual(offered, ['2026-11-10', '2026-12-15'])
 })
