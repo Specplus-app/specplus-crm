@@ -5,7 +5,9 @@ import {
   sendScheduleOptions, suggestedReadyDate, validateOfferDates,
 } from '../lib/schedule'
 import { addDays, formatDateOnly, todayDateOnly } from '../lib/scheduleDates'
-import { AlertCircle, AlertTriangle, CalendarCheck, CalendarClock, CalendarDays, CalendarX, Loader2, Plus, RefreshCw, Send, Trash2, X } from 'lucide-react'
+import { toggleOfferDate } from '../lib/calendarContext'
+import ScheduleContextCalendar from './ScheduleContextCalendar'
+import { AlertCircle, AlertTriangle, CalendarCheck, CalendarClock, CalendarDays, CalendarX, Loader2, RefreshCw, Send, X } from 'lucide-react'
 
 const longDate = (d: string) => formatDateOnly(d, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
 
@@ -237,6 +239,8 @@ export default function LeadSchedulePanel({
 
       {dialog === 'offer' && (
         <OfferDatesDialog
+          shopId={lead.shop_id}
+          leadId={lead.id}
           isReschedule={!!reservation}
           replacing={!!activeOffer || !!pendingRequest}
           onClose={() => setDialog(null)}
@@ -256,6 +260,8 @@ export default function LeadSchedulePanel({
       )}
       {dialog === 'confirm' && pendingRequest && (
         <ConfirmScheduleDialog
+          shopId={lead.shop_id}
+          leadId={lead.id}
           startDate={pendingRequest.start_date}
           suggestedReady={suggestedReadyDate(pendingRequest.start_date, Number(state.currentQuote?.estimated_lead_time_days) || 0, addDays)}
           leadTimeDays={Number(state.currentQuote?.estimated_lead_time_days) || 0}
@@ -331,10 +337,10 @@ function ErrorLine({ text, action }: { text: string; action?: ReactNode }) {
 
 const inputCls = 'w-full bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500 transition-colors'
 
-function Modal({ title, onClose, busy, children }: { title: string; onClose: () => void; busy: boolean; children: ReactNode }) {
+function Modal({ title, onClose, busy, wide = false, children }: { title: string; onClose: () => void; busy: boolean; wide?: boolean; children: ReactNode }) {
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => { if (!busy) onClose() }}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-2 sm:p-4" onClick={() => { if (!busy) onClose() }}>
+      <div className={`bg-white rounded-2xl shadow-2xl w-full ${wide ? 'max-w-4xl' : 'max-w-md'} max-h-[94vh] sm:max-h-[90vh] overflow-y-auto`} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b border-zinc-100">
           <h2 className="text-lg font-bold text-zinc-900">{title}</h2>
           <button onClick={onClose} disabled={busy} className="text-zinc-400 hover:text-zinc-600 disabled:opacity-40" aria-label="Close"><X size={20} /></button>
@@ -376,58 +382,73 @@ function useSubmit(onSubmit: () => Promise<string | null>) {
   return { busy, error, setError, run }
 }
 
-function OfferDatesDialog({ isReschedule, replacing, onClose, onSubmit }: {
+// Calendar on the left (stacked on narrow screens), the offer on the right.
+// Selections and the note stay put if the calendar or sending fails.
+function OfferDatesDialog({ shopId, leadId, isReschedule, replacing, onClose, onSubmit }: {
+  shopId: string
+  leadId: string
   isReschedule: boolean
   replacing: boolean
   onClose: () => void
   onSubmit: (dates: string[], note: string) => Promise<string | null>
 }) {
   const today = todayDateOnly()
-  const [dates, setDates] = useState<string[]>([''])
+  const [dates, setDates] = useState<string[]>([])
   const [note, setNote] = useState('')
+  const [pickError, setPickError] = useState<string | null>(null)
   const submit = useSubmit(async () => {
     const checked = validateOfferDates(dates, today)
     if (checked.error) return checked.error
     return onSubmit(checked.dates, note)
   })
+  const toggle = (day: string) => {
+    const next = toggleOfferDate(dates, day, today)
+    setDates(next.dates)
+    setPickError(next.error)
+  }
 
   return (
-    <Modal title={isReschedule ? 'Reschedule' : 'Offer dates'} onClose={onClose} busy={submit.busy}>
-      <p className="text-sm text-zinc-600">
-        {isReschedule
-          ? 'The current booking stays in place until you confirm the customer\'s new choice.'
-          : 'The customer picks one of these production start dates from their quote link. Nothing is reserved until you confirm.'}
-      </p>
-      {replacing && <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">Sending replaces the dates already offered, including any date the customer has requested.</p>}
-      <div>
-        <label className="block text-xs font-semibold text-zinc-600 mb-1">Start dates</label>
-        <div className="space-y-2">
-          {dates.map((d, i) => (
-            <div key={i} className="flex gap-2">
-              <input type="date" min={today} value={d} onChange={(e) => setDates(dates.map((x, j) => (j === i ? e.target.value : x)))} className={inputCls} />
-              {dates.length > 1 && (
-                <button onClick={() => setDates(dates.filter((_, j) => j !== i))} className="p-2 text-zinc-400 hover:text-red-600" aria-label="Remove date"><Trash2 size={15} /></button>
-              )}
-            </div>
-          ))}
+    <Modal title={isReschedule ? 'Reschedule' : 'Offer dates'} onClose={onClose} busy={submit.busy} wide>
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
+        <ScheduleContextCalendar shopId={shopId} leadId={leadId} initialFocus={today} mode={{ kind: 'offer', selected: dates, onToggle: toggle }} />
+        <div className="space-y-4 min-w-0">
+          <p className="text-sm text-zinc-600">
+            {isReschedule
+              ? "Pick new start dates on the calendar. The current booking stays in place until you confirm the customer's new choice."
+              : "Pick start dates on the calendar. The customer chooses one from their quote link. Offered dates don't reserve space; nothing is booked until you confirm."}
+          </p>
+          {replacing && <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">Sending replaces the dates already offered, including any date the customer has requested.</p>}
+          <div>
+            <p className="text-xs font-semibold text-zinc-600 mb-1.5">Start dates to offer ({dates.length}/10)</p>
+            {dates.length === 0 ? (
+              <p className="text-xs text-zinc-400">None yet. Select a day on the calendar, then choose “Offer this start date”.</p>
+            ) : (
+              <ul className="flex flex-wrap gap-1.5">
+                {dates.map((d) => (
+                  <li key={d} className="inline-flex items-center gap-1 text-xs rounded-md border border-brand-200 bg-brand-50 text-brand-800 pl-2 pr-1 py-0.5">
+                    {longDate(d)}
+                    <button type="button" onClick={() => toggle(d)} disabled={submit.busy} className="p-0.5 rounded hover:bg-brand-100" aria-label={`Remove ${longDate(d)}`}><X size={12} /></button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {pickError && <p className="text-xs text-red-700 mt-1.5">{pickError}</p>}
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-zinc-600 mb-1">Note to customer <span className="font-normal text-zinc-400">(optional, shown to the customer)</span></label>
+            <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} maxLength={1000} className={`${inputCls} resize-none`} />
+          </div>
+          {submit.error && <ErrorLine text={submit.error} />}
+          <DialogButtons busy={submit.busy} label="Send date options" onCancel={onClose} onConfirm={submit.run} />
         </div>
-        {dates.length < 10 && (
-          <button onClick={() => setDates([...dates, ''])} className="flex items-center gap-1.5 text-sm font-medium text-brand-600 hover:bg-brand-50 rounded-lg px-2 py-1 mt-2">
-            <Plus size={14} /> Add another date
-          </button>
-        )}
       </div>
-      <div>
-        <label className="block text-xs font-semibold text-zinc-600 mb-1">Note to customer <span className="font-normal text-zinc-400">(optional, shown to the customer)</span></label>
-        <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} maxLength={1000} className={`${inputCls} resize-none`} />
-      </div>
-      {submit.error && <ErrorLine text={submit.error} />}
-      <DialogButtons busy={submit.busy} label="Send date options" onCancel={onClose} onConfirm={submit.run} />
     </Modal>
   )
 }
 
-function ConfirmScheduleDialog({ startDate, suggestedReady, leadTimeDays, replacing, onClose, onSubmit }: {
+function ConfirmScheduleDialog({ shopId, leadId, startDate, suggestedReady, leadTimeDays, replacing, onClose, onSubmit }: {
+  shopId: string
+  leadId: string
   startDate: string
   suggestedReady: string
   leadTimeDays: number
@@ -444,20 +465,30 @@ function ConfirmScheduleDialog({ startDate, suggestedReady, leadTimeDays, replac
   })
 
   return (
-    <Modal title="Confirm schedule" onClose={onClose} busy={submit.busy}>
-      <p className="text-sm text-zinc-700">Customer's requested start: <strong>{longDate(startDate)}</strong></p>
-      {replacing && <p className="text-xs text-zinc-600 bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2">This replaces the current booking ({replacing}).</p>}
-      <div>
-        <label className="block text-xs font-semibold text-zinc-600 mb-1">Estimated ready date</label>
-        <input type="date" min={startDate} value={ready} onChange={(e) => setReady(e.target.value)} className={inputCls} />
-        {leadTimeDays > 0 && <p className="text-[11px] text-zinc-500 mt-1">For reference: the approved quote estimates {leadTimeDays} {leadTimeDays === 1 ? 'day' : 'days'} of lead time.</p>}
+    <Modal title="Confirm schedule" onClose={onClose} busy={submit.busy} wide>
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
+        <ScheduleContextCalendar
+          shopId={shopId}
+          leadId={leadId}
+          initialFocus={startDate}
+          mode={{ kind: 'confirm', start: startDate, ready: ready || null, onSetReady: setReady }}
+        />
+        <div className="space-y-4 min-w-0">
+          <p className="text-sm text-zinc-700">Customer's requested start: <strong>{longDate(startDate)}</strong></p>
+          {replacing && <p className="text-xs text-zinc-600 bg-zinc-50 border border-zinc-200 rounded-lg px-3 py-2">This replaces the current booking ({replacing}).</p>}
+          <div>
+            <label className="block text-xs font-semibold text-zinc-600 mb-1">Estimated ready date</label>
+            <input type="date" min={startDate} value={ready} onChange={(e) => setReady(e.target.value)} className={inputCls} />
+            {leadTimeDays > 0 && <p className="text-[11px] text-zinc-500 mt-1">For reference: the approved quote estimates {leadTimeDays} {leadTimeDays === 1 ? 'day' : 'days'} of lead time.</p>}
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-zinc-600 mb-1">Internal notes <span className="font-normal text-zinc-400">(shop only)</span></label>
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} maxLength={2000} className={`${inputCls} resize-none`} />
+          </div>
+          {submit.error && <ErrorLine text={submit.error} />}
+          <DialogButtons busy={submit.busy} label="Confirm schedule" onCancel={onClose} onConfirm={submit.run} />
+        </div>
       </div>
-      <div>
-        <label className="block text-xs font-semibold text-zinc-600 mb-1">Internal notes <span className="font-normal text-zinc-400">(shop only)</span></label>
-        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} maxLength={2000} className={`${inputCls} resize-none`} />
-      </div>
-      {submit.error && <ErrorLine text={submit.error} />}
-      <DialogButtons busy={submit.busy} label="Confirm schedule" onCancel={onClose} onConfirm={submit.run} />
     </Modal>
   )
 }

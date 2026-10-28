@@ -586,3 +586,46 @@ test('scheduling history is append-only', async () => {
   await db.query(`DELETE FROM leads WHERE id = $1`, [leadId])
   assert.equal((await one(db, `SELECT count(*)::int AS n FROM schedule_reservations WHERE lead_id = $1`, [leadId])).n, 0)
 })
+
+// ---------------------------------------------------------------------------
+// Calendar context (Schedule page and the lead's Offer/Confirm dialogs)
+// ---------------------------------------------------------------------------
+
+test('the shop calendar shows overlapping bookings and pending requests to its own staff only', async () => {
+  // Two customers of shop A: one booked, one with a pending request on a
+  // date inside that booking. Overlap is allowed.
+  const booked = await approvedLead(false)
+  await offerDates(booked.leadId, 'userA', [D(20)])
+  await requestDate(booked.quote.public_token, (await publicSchedule(booked.quote.public_token)).offer.options[0].id)
+  assert.equal((await confirm(booked.leadId, 'userA', D(24))).ok, true)
+  const waiting = await approvedLead(false)
+  await offerDates(waiting.leadId, 'userA', [D(22)])
+  await requestDate(waiting.quote.public_token, (await publicSchedule(waiting.quote.public_token)).offer.options[0].id)
+
+  // The calendar's queries (src/lib/calendarContext.ts loadShopCalendar).
+  const calendar = (who: any) => as(db, who, async (tx: any) => ({
+    jobs: (await tx.query(`SELECT r.lead_id, r.start_date, r.estimated_ready_date, l.customer_name FROM schedule_reservations r
+      LEFT JOIN leads l ON l.id = r.lead_id
+      WHERE r.shop_id = $1 AND r.status = 'active' AND r.start_date <= $3 AND r.estimated_ready_date >= $2`, [ids.shopA, D(21), D(23)])).rows,
+    pending: (await tx.query(`SELECT q.lead_id, q.start_date FROM schedule_requests q
+      WHERE q.shop_id = $1 AND q.status = 'pending' AND q.start_date BETWEEN $2 AND $3`, [ids.shopA, D(21), D(23)])).rows,
+  }))
+  const own = await calendar(staff('userA'))
+  assert.ok(own.jobs.some((j: any) => j.lead_id === booked.leadId && dateText(j.start_date) === D(20) && dateText(j.estimated_ready_date) === D(24)),
+    'a booking that started before the window still shows across its range')
+  assert.ok(own.pending.some((p: any) => p.lead_id === waiting.leadId && dateText(p.start_date) === D(22)))
+  assert.ok(!own.jobs.some((j: any) => j.lead_id === waiting.leadId), 'a pending request is not a booking')
+
+  const other = await calendar(staff('userB'))
+  assert.deepEqual(other, { jobs: [], pending: [] }, 'another shop sees nothing')
+
+  // Customers only ever see their own schedule on their quote link.
+  for (const [mine, theirs] of [[booked, waiting], [waiting, booked]] as const) {
+    const s = JSON.stringify(await publicSchedule(mine.quote.public_token))
+    assert.ok(!s.includes(theirs.leadId), 'no other lead ids')
+    const theirReservation = await activeReservation(theirs.leadId)
+    if (theirReservation) assert.ok(!s.includes(theirReservation.id), 'no other bookings')
+    const theirRequest = await pendingRequest(theirs.leadId)
+    if (theirRequest) assert.ok(!s.includes(theirRequest.id), 'no other requests')
+  }
+})

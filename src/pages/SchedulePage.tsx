@@ -1,27 +1,14 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { agendaKey, agendaReducer, initialAgenda } from '../lib/agendaState'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
-import { supabase, getWorkflowMeta, workflowStatusFor } from '../lib/supabase'
+import { getWorkflowMeta, workflowStatusFor } from '../lib/supabase'
+import { jobPosition, type CalendarJob } from '../lib/calendarContext'
+import { useShopCalendar } from '../lib/useShopCalendar'
 import {
   calendarDays, formatDateOnly, formatDateRange, formatMonth, isSameMonth, jobsByDay, shiftFocus, startOfMonth,
   todayDateOnly, type CalendarView, type DateOnly,
 } from '../lib/scheduleDates'
 import { AlertCircle, CalendarClock, CalendarDays, ChevronLeft, ChevronRight, Package, Truck } from 'lucide-react'
-
-type LeadInfo = { id: string; customer_name: string; vehicle_name: string; fulfillment_mode: 'local' | 'mail'; status: string }
-
-type AgendaJob = {
-  id: string
-  lead_id: string
-  start_date: DateOnly
-  estimated_ready_date: DateOnly
-  lead: LeadInfo | null
-}
-
-type PendingRequest = { id: string; lead_id: string; start_date: DateOnly; requested_at: string; lead: LeadInfo | null }
-
-const LEAD_FIELDS = 'id, customer_name, vehicle_name, fulfillment_mode, status'
 
 // Production calendar (Month or Week): confirmed jobs on every date they
 // cover (including jobs spanning into or out of the range; overlaps are
@@ -33,67 +20,13 @@ export default function SchedulePage() {
   const [view, setView] = useState<CalendarView>('month')
   // Any date inside the week/month on screen; switching views keeps it.
   const [focus, setFocus] = useState<DateOnly>(() => todayDateOnly())
-  const [agenda, dispatch] = useReducer(
-    agendaReducer<AgendaJob, PendingRequest>,
-    undefined,
-    () => initialAgenda<AgendaJob, PendingRequest>(),
-  )
-  const loadSeq = useRef(0)
-
   const days = useMemo(() => calendarDays(view, focus), [view, focus])
   const rangeStart = days[0]
   const rangeEnd = days[days.length - 1]
   const today = todayDateOnly()
   const shopId = profile?.shop_id ?? null
-  const viewKey = shopId ? agendaKey(shopId, rangeStart, rangeEnd) : null
-
-  const load = useCallback(async () => {
-    if (!shopId) return
-    const id = ++loadSeq.current
-    dispatch({ type: 'loadStart', id, key: agendaKey(shopId, rangeStart, rangeEnd) })
-    try {
-      const [jobsRes, pendingRes] = await Promise.all([
-        supabase.from('schedule_reservations')
-          .select(`id, lead_id, start_date, estimated_ready_date, lead:leads(${LEAD_FIELDS})`)
-          .eq('shop_id', shopId)
-          .eq('status', 'active')
-          .lte('start_date', rangeEnd)
-          .gte('estimated_ready_date', rangeStart)
-          .order('start_date', { ascending: true }),
-        supabase.from('schedule_requests')
-          .select(`id, lead_id, start_date, requested_at, lead:leads(${LEAD_FIELDS})`)
-          .eq('shop_id', shopId)
-          .eq('status', 'pending')
-          .gte('start_date', rangeStart)
-          .lte('start_date', rangeEnd)
-          .order('start_date', { ascending: true }),
-      ])
-      if (jobsRes.error || pendingRes.error) {
-        dispatch({ type: 'loadFailure', id, error: (jobsRes.error ?? pendingRes.error)!.message })
-        return
-      }
-      dispatch({
-        type: 'loadSuccess',
-        id,
-        jobs: (jobsRes.data ?? []) as unknown as AgendaJob[],
-        pending: (pendingRes.data ?? []) as unknown as PendingRequest[],
-      })
-    } catch (err) {
-      dispatch({ type: 'loadFailure', id, error: err instanceof Error ? err.message : 'Network error' })
-    }
-  }, [shopId, rangeStart, rangeEnd])
-
-  // Only rows loaded for the shop and date range on screen are ever shown.
-  const current = agenda.key === viewKey
-  const jobs = current ? agenda.jobs : []
-  const pending = current ? agenda.pending : []
-  const loading = !current || agenda.status === 'loading'
-  const loaded = current && agenda.loaded
-  const error = current ? agenda.error : null
-
-  useEffect(() => {
-    load()
-  }, [load])
+  // Shared with the lead's scheduling dialogs (src/lib/useShopCalendar.ts).
+  const { jobs, pending, loading, loaded, error, refresh: load } = useShopCalendar(shopId, rangeStart, rangeEnd)
 
   const byDay = useMemo(() => jobsByDay(jobs, days), [jobs, days])
   const open = (leadId: string) => navigate(`/dashboard/leads/${leadId}`)
@@ -200,10 +133,10 @@ export default function SchedulePage() {
   )
 }
 
-function JobCard({ job, day, onOpen }: { job: AgendaJob; day: DateOnly; onOpen: () => void }) {
+function JobCard({ job, day, onOpen }: { job: CalendarJob; day: DateOnly; onOpen: () => void }) {
   const lead = job.lead
   const stage = getWorkflowMeta(workflowStatusFor(lead?.status ?? 'scheduled'))
-  const position = job.start_date === day ? 'Starts' : job.estimated_ready_date === day ? 'Ready' : 'In shop'
+  const position = jobPosition(job, day)
   return (
     <button onClick={onOpen} className="w-full text-left rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 px-2 py-1.5 transition-colors">
       <p className="text-xs font-semibold text-slate-100 truncate">{lead?.customer_name ?? 'Lead'}</p>
@@ -232,7 +165,7 @@ function MonthGrid({ days, focus, today, byDay, onOpen, onOpenWeek }: {
   days: DateOnly[]
   focus: DateOnly
   today: DateOnly
-  byDay: Map<DateOnly, AgendaJob[]>
+  byDay: Map<DateOnly, CalendarJob[]>
   onOpen: (leadId: string) => void
   onOpenWeek: (day: DateOnly) => void
 }) {
@@ -306,10 +239,10 @@ function MonthGrid({ days, focus, today, byDay, onOpen, onOpenWeek }: {
   )
 }
 
-function MonthJobChip({ job, day, onOpen }: { job: AgendaJob; day: DateOnly; onOpen: () => void }) {
+function MonthJobChip({ job, day, onOpen }: { job: CalendarJob; day: DateOnly; onOpen: () => void }) {
   const lead = job.lead
   const stage = getWorkflowMeta(workflowStatusFor(lead?.status ?? 'scheduled'))
-  const position = job.start_date === day ? 'Starts' : job.estimated_ready_date === day ? 'Ready' : 'In shop'
+  const position = jobPosition(job, day)
   return (
     <button
       onClick={onOpen}
