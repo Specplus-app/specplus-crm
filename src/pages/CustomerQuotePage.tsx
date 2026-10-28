@@ -212,6 +212,23 @@ export default function CustomerQuotePage() {
           </div>
         </div>
 
+        {/* Approval: right after the vehicle summary so it is easy to find; details follow below. */}
+        {canRespond && (
+          <div className="bg-obsidian-900/60 backdrop-blur-xl rounded-2xl border border-white/10 p-6 mb-5">
+            <h2 className="text-sm font-semibold text-white mb-1">Ready to move forward?</h2>
+            <p className="text-sm text-slate-400 mb-4">
+              Review the quote details below before approving. If you have a question or need a change, send the shop a message below.
+            </p>
+            <button
+              onClick={() => { setResponseError(null); setConfirming(true) }}
+              disabled={quote.viewer_is_staff}
+              className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl px-5 py-3 transition-colors"
+            >
+              <CheckCircle2 size={18} /> Approve Quote
+            </button>
+          </div>
+        )}
+
         {/* Visual */}
         {(quote.front_image_url || quote.rear_image_url) && (
           <div className="mb-5">
@@ -308,23 +325,6 @@ export default function CustomerQuotePage() {
                 : null
           }
         />
-
-        {/* Approval */}
-        {canRespond && (
-          <div className="bg-obsidian-900/60 backdrop-blur-xl rounded-2xl border border-white/10 p-6 mb-5">
-            <h2 className="text-sm font-semibold text-white mb-1">Ready to move forward?</h2>
-            <p className="text-sm text-slate-400 mb-4">
-              Review the quote above. If everything looks good, approve it below. If you need a change, send the shop a message first.
-            </p>
-            <button
-              onClick={() => { setResponseError(null); setConfirming(true) }}
-              disabled={quote.viewer_is_staff}
-              className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl px-5 py-3 transition-colors"
-            >
-              <CheckCircle2 size={18} /> Approve Quote
-            </button>
-          </div>
-        )}
 
         {quote.shop.phone && (
           <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs text-slate-500 mt-8">
