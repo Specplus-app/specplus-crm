@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { supabase } from '../lib/supabase'
 import {
-  BOOKING_WINDOW_CHOICES, bookingWindowLabel, blockedRanges, setBookingWindow, setDatesBlocked, validateBlockRange,
-  type ShopAvailability,
+  BOOKING_WINDOW_CHOICES, bookingWindowLabel, blockedRanges, runAvailabilityAction, setBookingWindow, setDatesBlocked,
+  validateBlockRange, type ShopAvailability,
 } from '../lib/shopAvailability'
 import { formatDateOnly, formatDateRange, todayDateOnly } from '../lib/scheduleDates'
 import { AlertCircle, Ban, CalendarRange, Loader2, RefreshCw, Unlock } from 'lucide-react'
@@ -28,15 +28,19 @@ export default function ScheduleAvailability({ shopId, readOnly, availability, l
   const [actionError, setActionError] = useState<string | null>(null)
   const [showAll, setShowAll] = useState(false)
 
+  // Entered dates stay in the form unless the save succeeds, and the
+  // controls are always released, even if the save or refresh throws.
   const run = async (key: string, action: () => Promise<{ error: string | null }>) => {
     if (busy) return false
     setBusy(key)
     setActionError(null)
-    const { error: err } = await action()
-    if (err) setActionError(err)
-    await onChanged()
-    setBusy(null)
-    return !err
+    try {
+      const result = await runAvailabilityAction(action, onChanged)
+      setActionError(result.error)
+      return result.ok
+    } finally {
+      setBusy(null)
+    }
   }
 
   const changeWindow = (days: number) => run('window', () => setBookingWindow(supabase, shopId, days))

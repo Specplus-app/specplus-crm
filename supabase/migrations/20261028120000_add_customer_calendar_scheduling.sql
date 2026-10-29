@@ -23,8 +23,8 @@ Customer calendar request (request_schedule_calendar_date, token-scoped):
     work has not started, the lead is open, and no date options are active
     (customers who already received options keep using them).
   - The date must be within [tomorrow, today + window] (server UTC date) and
-    not blocked. Checked under the lead lock and a share lock on the shop's
-    settings row, which blocking takes FOR UPDATE.
+    not blocked. Checked under the lead lock and the shop's availability lock
+    (see below).
   - Creates a pending schedule_requests row with source = 'calendar' (no
     offer/option) and records the same schedule_date_requested event, so the
     existing date_requested notification and the Scheduling stage apply.
@@ -39,6 +39,16 @@ refuses blocked dates. Bookings, history and rescheduling are unchanged.
 
 Customer-safe output: get_public_schedule exposes the window bounds and the
 shop's blocked dates inside it, never other jobs, requests, names or notes.
+
+Availability lock: a transaction-scoped advisory lock per shop
+(schedule_lock_availability), so it exists whether or not the shop has a
+settings row. Changing availability (window, block/unblock) takes it
+exclusively; every write that checks availability (customer requests,
+confirm_schedule, create_schedule_offer) takes it shared before its check
+and holds it until commit, so a block can't land between a check and the
+write it guards. Lock order is always lead row first, then the availability
+lock; the availability changes take no lead locks, so the two can't
+deadlock. Authorization still runs before any lock.
 */
 
 BEGIN;
@@ -177,6 +187,32 @@ AS $$
   END;
 $$;
 
+-- Per-shop advisory lock key (a hash collision only serializes two shops).
+CREATE OR REPLACE FUNCTION public.schedule_availability_lock_key(p_shop_id uuid)
+RETURNS bigint
+LANGUAGE sql
+IMMUTABLE
+SET search_path = ''
+AS $$
+  SELECT hashtextextended('specplus.shop_availability:' || p_shop_id::text, 0);
+$$;
+
+-- Takes the shop's availability lock until the transaction ends: exclusive
+-- to change availability, shared to check it before a dependent write.
+CREATE OR REPLACE FUNCTION public.schedule_lock_availability(p_shop_id uuid, p_exclusive boolean)
+RETURNS void
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+BEGIN
+  IF p_exclusive THEN
+    PERFORM pg_advisory_xact_lock(public.schedule_availability_lock_key(p_shop_id));
+  ELSE
+    PERFORM pg_advisory_xact_lock_shared(public.schedule_availability_lock_key(p_shop_id));
+  END IF;
+END;
+$$;
+
 -- Authorizes an admin or a writable shop user of the given shop for
 -- availability settings (same rule as schedule_authorize, shop-level wording).
 CREATE OR REPLACE FUNCTION public.schedule_authorize_shop(p_actor_id uuid, p_shop_id uuid)
@@ -227,6 +263,7 @@ BEGIN
   IF p_days IS NULL OR p_days NOT BETWEEN 7 AND 365 THEN
     RAISE EXCEPTION 'The booking window must be between 7 and 365 days.' USING ERRCODE = 'check_violation';
   END IF;
+  PERFORM public.schedule_lock_availability(p_shop_id, true);
   INSERT INTO public.shop_schedule_settings AS s (shop_id, booking_window_days, updated_by, updated_at)
   VALUES (p_shop_id, p_days, v_uid, now())
   ON CONFLICT (shop_id) DO UPDATE SET booking_window_days = EXCLUDED.booking_window_days,
@@ -263,9 +300,8 @@ BEGIN
   END IF;
   v_start := greatest(p_start, current_date - 1);
 
-  -- Serializes with customer calendar requests (they take a share lock).
-  INSERT INTO public.shop_schedule_settings (shop_id) VALUES (p_shop_id) ON CONFLICT (shop_id) DO NOTHING;
-  PERFORM 1 FROM public.shop_schedule_settings s WHERE s.shop_id = p_shop_id FOR UPDATE;
+  -- Waits for in-flight requests/confirmations that checked availability.
+  PERFORM public.schedule_lock_availability(p_shop_id, true);
 
   IF p_blocked THEN
     INSERT INTO public.shop_blocked_dates (shop_id, blocked_date, created_by)
@@ -331,6 +367,7 @@ BEGIN
   IF NOT public.schedule_start_date_is_open(v_dates[1]) THEN
     RAISE EXCEPTION 'Start dates cannot be in the past.' USING ERRCODE = 'check_violation';
   END IF;
+  PERFORM public.schedule_lock_availability(v_lead.shop_id, false);
   SELECT min(d) INTO v_blocked FROM unnest(v_dates) d WHERE public.schedule_date_is_blocked(v_lead.shop_id, d);
   IF v_blocked IS NOT NULL THEN
     RAISE EXCEPTION '% is blocked on your calendar. Unblock it on the Schedule page or choose another date.',
@@ -400,6 +437,8 @@ BEGIN
   IF NOT public.schedule_start_date_is_open(v_request.start_date) THEN
     RAISE EXCEPTION 'The requested start date has passed. Offer fresh dates or ask the customer to choose another date.' USING ERRCODE = 'check_violation';
   END IF;
+  -- Held until commit, so the date can't be blocked before the booking lands.
+  PERFORM public.schedule_lock_availability(v_lead.shop_id, false);
   IF public.schedule_date_is_blocked(v_lead.shop_id, v_request.start_date) THEN
     RAISE EXCEPTION 'The requested start date is blocked on your calendar. Unblock it on the Schedule page to confirm, or ask the customer to choose another date.'
       USING ERRCODE = 'check_violation';
@@ -602,7 +641,7 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'error', 'date_passed');
   END IF;
 
-  PERFORM 1 FROM public.shop_schedule_settings s WHERE s.shop_id = v_lead.shop_id FOR SHARE;
+  PERFORM public.schedule_lock_availability(v_lead.shop_id, false);
   IF public.schedule_date_is_blocked(v_lead.shop_id, v_option.start_date) THEN
     RETURN jsonb_build_object('ok', false, 'error', 'date_blocked');
   END IF;
@@ -690,8 +729,8 @@ BEGIN
     RETURN jsonb_build_object('ok', false, 'error', 'use_offered_dates');
   END IF;
 
-  -- Serializes with blocking/unblocking (FOR UPDATE on the same row).
-  PERFORM 1 FROM public.shop_schedule_settings s WHERE s.shop_id = v_lead.shop_id FOR SHARE;
+  -- Serializes with window and block/unblock changes until commit.
+  PERFORM public.schedule_lock_availability(v_lead.shop_id, false);
   v_problem := public.schedule_calendar_date_problem(v_lead.shop_id, p_start_date);
   IF v_problem IS NOT NULL THEN
     RETURN jsonb_build_object('ok', false, 'error', v_problem);
@@ -766,6 +805,8 @@ REVOKE ALL ON FUNCTION public.schedule_booking_window_days(uuid) FROM PUBLIC, an
 REVOKE ALL ON FUNCTION public.schedule_date_is_blocked(uuid, date) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.schedule_calendar_date_problem(uuid, date) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.schedule_authorize_shop(uuid, uuid) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.schedule_availability_lock_key(uuid) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.schedule_lock_availability(uuid, boolean) FROM PUBLIC, anon, authenticated;
 
 REVOKE ALL ON FUNCTION public.set_schedule_booking_window(uuid, integer) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.set_schedule_dates_blocked(uuid, date, date, boolean) FROM PUBLIC, anon, authenticated;

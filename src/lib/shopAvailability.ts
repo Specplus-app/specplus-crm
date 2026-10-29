@@ -59,6 +59,32 @@ export function validateBlockRange(start: string, end: string, today: DateOnly):
 
 type Result<T> = { data: T | null; error: string | null }
 
+export const SAVE_FAILED = "Couldn't save the change. Check your connection and try again."
+
+// Runs one availability change, then refreshes. Never throws: a thrown or
+// returned save error is reported, and a refresh failure after a successful
+// save is reported separately (the change was saved).
+export async function runAvailabilityAction(
+  action: () => Promise<{ error: string | null }>,
+  refresh: () => Promise<void> | void,
+): Promise<{ ok: boolean; error: string | null }> {
+  let ok = false
+  let error: string | null = null
+  try {
+    const result = await action()
+    ok = !result.error
+    error = result.error
+  } catch (err) {
+    error = err instanceof Error && err.message ? `${SAVE_FAILED} (${err.message})` : SAVE_FAILED
+  }
+  try {
+    await refresh()
+  } catch {
+    if (ok) error = 'Saved, but the calendar could not refresh. Use the refresh button to update it.'
+  }
+  return { ok, error }
+}
+
 // The shop's window and its blocked dates from `from` on. Staff-only: RLS
 // limits both tables to the signed-in user's shop (admins: any shop).
 export async function loadShopAvailability(client: SupabaseClient, shopId: string, from: DateOnly): Promise<Result<ShopAvailability>> {

@@ -459,6 +459,110 @@ test('read-only shops cannot change availability; admins can', async () => {
   assert.equal((await confirm(leadId, 'admin', D(6))).ok, true)
 })
 
+// ---------------------------------------------------------------------------
+// Availability lock
+//
+// PGlite runs a single connection, so these tests cannot run two
+// transactions at once and show one waiting for the other. They verify the
+// mechanism instead: inside each caller's transaction, before it commits,
+// which per-shop advisory lock it holds (shared for writes that check
+// availability, exclusive for availability changes), that this holds for a
+// shop with no settings row, and that it is released at commit. Real
+// multi-connection blocking is Postgres advisory-lock semantics and is not
+// exercised here.
+// ---------------------------------------------------------------------------
+
+const lockKey = async (shopKey: ShopKey) =>
+  (await one(db, `SELECT public.schedule_availability_lock_key($1)::text AS k`, [ids[shopKey]])).k as string
+// Advisory locks on a bigint key report the high/low 32 bits in classid/objid.
+// PGlite reports no pid for its single backend, so every row is this
+// connection's (the only one).
+const heldLocks = async (q: any) => (await q.query(`SELECT mode, ((classid::bigint << 32) | objid::bigint)::text AS key
+  FROM pg_locks WHERE locktype = 'advisory' AND objsubid = 1`)).rows as { mode: string; key: string }[]
+const settingsRows = async (shopKey: ShopKey) =>
+  (await one(db, `SELECT count(*)::int AS n FROM shop_schedule_settings WHERE shop_id = $1`, [ids[shopKey]])).n
+
+test('every availability-dependent write holds the shop lock until commit, without a settings row', async () => {
+  await resetAvailability()
+  assert.equal(await settingsRows('shopA'), 0, 'shop A uses default settings')
+  const key = await lockKey('shopA')
+  assert.notEqual(key, await lockKey('shopB'), 'each shop has its own lock')
+  const expectShared = (locks: { mode: string; key: string }[], what: string) =>
+    assert.deepEqual(locks.filter((l) => l.key === key).map((l) => l.mode), ['ShareLock'], what)
+
+  // Customer calendar request.
+  const cal = await approvedLead()
+  expectShared(await as(db, anon, async (tx: any) => {
+    const r = await one(tx, `SELECT public.request_schedule_calendar_date($1, $2::date) AS r`, [cal.token, D(5)])
+    assert.equal(r.r.ok, true)
+    return heldLocks(tx)
+  }), 'request_schedule_calendar_date')
+  assert.deepEqual(await heldLocks(db), [], 'released at commit')
+
+  // Staff confirmation.
+  const req = await pendingRequest(cal.leadId)
+  const v = await version(cal.leadId)
+  expectShared(await as(db, staff('userA'), async (tx: any) => {
+    await tx.query(`SELECT public.confirm_schedule($1, $2, $3::date, null)`, [req.id, v, D(7)])
+    return heldLocks(tx)
+  }), 'confirm_schedule')
+
+  // Offer creation, and a customer choosing an offered date.
+  const off = await approvedLead()
+  const ov = await version(off.leadId)
+  let offerId = ''
+  expectShared(await as(db, staff('userA'), async (tx: any) => {
+    offerId = (await one(tx, `SELECT public.create_schedule_offer($1, $2, $3::date[], null) AS r`, [off.leadId, ov, [D(9)]])).r.offer_id
+    return heldLocks(tx)
+  }), 'create_schedule_offer')
+  await as(db, service, async (tx: any) => tx.query(`SELECT public.mark_schedule_offer_sent($1, $2)`, [offerId, ids.userA]))
+  const option = (await publicSchedule(off.token)).offer.options[0]
+  expectShared(await as(db, anon, async (tx: any) => {
+    assert.equal((await one(tx, `SELECT public.request_schedule_date($1, $2) AS r`, [off.token, option.id])).r.ok, true)
+    return heldLocks(tx)
+  }), 'request_schedule_date')
+
+  assert.equal(await settingsRows('shopA'), 0, 'still no settings row')
+})
+
+test('availability changes take the shop lock exclusively and need no settings row', async () => {
+  await resetAvailability()
+  const key = await lockKey('shopA')
+  for (const [what, sql, params] of [
+    ['set_schedule_dates_blocked', `SELECT public.set_schedule_dates_blocked($1, $2::date, $3::date, true)`, [ids.shopA, D(3), D(4)]],
+    ['set_schedule_dates_blocked (unblock)', `SELECT public.set_schedule_dates_blocked($1, $2::date, $3::date, false)`, [ids.shopA, D(4), D(4)]],
+    ['set_schedule_booking_window', `SELECT public.set_schedule_booking_window($1, 30)`, [ids.shopA]],
+  ] as const) {
+    const locks = await as(db, staff('userA'), async (tx: any) => {
+      await tx.query(sql, params)
+      return heldLocks(tx)
+    })
+    assert.deepEqual(locks.filter((l) => l.key === key).map((l) => l.mode), ['ExclusiveLock'], what)
+  }
+  assert.deepEqual(await heldLocks(db), [])
+})
+
+test('blocking a date for a shop on default settings creates no settings row', async () => {
+  await resetAvailability()
+  await setBlocked('shopA', D(3), D(3), true)
+  assert.equal(await settingsRows('shopA'), 0)
+  const { token } = await approvedLead()
+  assert.deepEqual((await publicSchedule(token)).calendar, { earliest: D(1), latest: D(60), blocked_dates: [D(3)] })
+})
+
+test('the lock helpers are not callable by clients', async () => {
+  for (const who of [anon, staff('userA')]) {
+    for (const sql of [
+      `SELECT public.schedule_lock_availability('${ids.shopA}', true)`,
+      `SELECT public.schedule_availability_lock_key('${ids.shopA}')`,
+    ]) {
+      await assert.rejects(as(db, who, async (tx: any) => tx.query(sql)), /permission denied/, sql)
+    }
+  }
+  // Authorization runs before the lock: another shop's user is refused.
+  await assert.rejects(setBlocked('shopA', D(3), D(3), true, 'userB'), /Shop not found/)
+})
+
 test('existing request rows default to the offer source and calendar rows must have no offer', async () => {
   const { leadId } = await approvedLead()
   await assert.rejects(db.query(`INSERT INTO schedule_requests (lead_id, shop_id, quote_id, start_date, source)

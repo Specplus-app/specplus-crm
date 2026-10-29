@@ -2,7 +2,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  DEFAULT_BOOKING_WINDOW_DAYS, blockedRanges, bookingWindowLabel, loadShopAvailability, setDatesBlocked, validateBlockRange,
+  DEFAULT_BOOKING_WINDOW_DAYS, SAVE_FAILED, blockedRanges, bookingWindowLabel, loadShopAvailability, runAvailabilityAction,
+  setDatesBlocked, validateBlockRange,
 } from '../src/lib/shopAvailability.ts'
 
 test('blocked dates are grouped into consecutive ranges', () => {
@@ -28,6 +29,26 @@ test('the block form is validated like the database', () => {
   assert.equal(validateBlockRange('2026-11-01', '2027-11-01', today), null, '366 days is allowed')
   assert.match(validateBlockRange('2026-10-01', '2026-10-05', today)!, /Past dates/)
   assert.equal(validateBlockRange('2026-10-20', '2026-11-02', today), null, 'a range reaching into the past is clamped by the server')
+})
+
+test('saving never throws: thrown and returned errors are reported, and the refresh always runs', async () => {
+  let refreshes = 0
+  const refresh = async () => { refreshes += 1 }
+
+  assert.deepEqual(await runAvailabilityAction(async () => ({ error: null }), refresh), { ok: true, error: null })
+  assert.deepEqual(await runAvailabilityAction(async () => ({ error: 'Past dates cannot be changed.' }), refresh),
+    { ok: false, error: 'Past dates cannot be changed.' })
+  assert.deepEqual(await runAvailabilityAction(async () => { throw new Error('Failed to fetch') }, refresh),
+    { ok: false, error: `${SAVE_FAILED} (Failed to fetch)` })
+  assert.deepEqual(await runAvailabilityAction(async () => { throw 'odd' }, refresh), { ok: false, error: SAVE_FAILED })
+  assert.equal(refreshes, 4, 'refreshes after every attempt, so the page shows what was saved')
+
+  const brokenRefresh = async () => { throw new Error('offline') }
+  const saved = await runAvailabilityAction(async () => ({ error: null }), brokenRefresh)
+  assert.equal(saved.ok, true, 'a failed refresh does not undo a successful save')
+  assert.match(saved.error!, /Saved, but the calendar could not refresh/)
+  const both = await runAvailabilityAction(async () => { throw new Error('boom') }, brokenRefresh)
+  assert.deepEqual(both, { ok: false, error: `${SAVE_FAILED} (boom)` }, 'the save error is the one shown')
 })
 
 test('window labels', () => {
