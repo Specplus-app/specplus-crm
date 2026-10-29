@@ -6,7 +6,8 @@ import { addDays } from '../src/lib/scheduleDates.ts'
 const approvedQuote = { id: 'q1', revision_number: 1, status: 'approved', superseded_at: null, grand_total: 900 }
 const offer = { id: 'o1', lead_id: 'l', quote_id: 'q1', quote_revision_number: 1, status: 'active' as const, customer_note: null,
   is_reschedule: false, created_at: '', sent_at: '', closed_at: null, options: [{ id: 'opt', start_date: '2026-11-02' }] }
-const request = { id: 'r1', offer_id: 'o1', quote_id: 'q1', start_date: '2026-11-02', status: 'pending' as const, requested_at: '' }
+const request = { id: 'r1', source: 'offer' as const, offer_id: 'o1', quote_id: 'q1', start_date: '2026-11-02', status: 'pending' as const, requested_at: '' }
+const calendarRequest = { ...request, id: 'r2', source: 'calendar' as const, offer_id: null }
 const reservation = { id: 'res', quote_id: 'q1', quote_revision_number: 1, start_date: '2026-11-02', estimated_ready_date: '2026-11-06',
   internal_notes: null, status: 'active' as const, confirmed_at: '', ended_at: null, cancel_reason: null }
 
@@ -28,6 +29,19 @@ test('confirmation needs a pending request on the active options for the current
   const revised = { ...approvedQuote, id: 'q2', revision_number: 2, status: 'sent' }
   assert.equal(scheduleActions('scheduling', state({ activeOffer: offer, pendingRequest: request, currentQuote: revised }), false).canConfirm, false)
   assert.equal(scheduleActions('scheduling', state({ activeOffer: offer, pendingRequest: request }), true).canConfirm, false, 'read-only')
+})
+
+test('a calendar request is confirmable without offered dates, unless its date is blocked', () => {
+  assert.equal(scheduleActions('scheduling', state({ pendingRequest: calendarRequest }), false).canConfirm, true)
+  assert.equal(scheduleActions('scheduling', state({ pendingRequest: calendarRequest, pendingRequestBlocked: true }), false).canConfirm, false)
+  assert.equal(scheduleActions('scheduling', state({ activeOffer: offer, pendingRequest: request, pendingRequestBlocked: true }), false).canConfirm, false)
+  // Sending options supersedes a calendar request, so the pair is stale.
+  assert.equal(scheduleActions('scheduling', state({ activeOffer: offer, pendingRequest: calendarRequest }), false).canConfirm, false)
+  // An offered request still needs its options.
+  assert.equal(scheduleActions('scheduling', state({ pendingRequest: request }), false).canConfirm, false)
+  const revised = { ...approvedQuote, id: 'q2', revision_number: 2, status: 'sent' }
+  assert.equal(scheduleActions('scheduling', state({ pendingRequest: calendarRequest, currentQuote: revised }), false).canConfirm, false)
+  assert.equal(scheduleActions('lost', state({ pendingRequest: calendarRequest }), false).canConfirm, false)
 })
 
 test('booked jobs: reschedule and cancel until work starts; newer terms are flagged', () => {

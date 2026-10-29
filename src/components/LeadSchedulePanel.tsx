@@ -68,7 +68,7 @@ export default function LeadSchedulePanel({
     } else if (state.activeOffer && !state.reservation) {
       setNotice('Date options were sent. The job moves to Scheduled after the customer picks a date and you confirm it.')
     } else if (actions.canOffer) {
-      setNotice('Scheduled needs a confirmed production date. Offer dates to the customer first.')
+      setNotice('Scheduled needs a confirmed production date. The customer can request one from their quote link, or you can offer dates.')
       setDialog('offer')
     } else {
       setNotice(`Scheduled needs a confirmed production date. ${actions.offerBlockedReason ?? ''}`.trim())
@@ -129,7 +129,7 @@ export default function LeadSchedulePanel({
       <div className="space-y-3">
         {a.scheduleMissing && (
           <p className="text-sm text-zinc-600">
-            This job is marked Scheduled but has no confirmed production date. Offer dates to the customer to book one.
+            This job is marked Scheduled but has no confirmed production date. The customer can request one from their quote link, or you can offer dates.
           </p>
         )}
 
@@ -153,9 +153,17 @@ export default function LeadSchedulePanel({
 
         {pendingRequest && (
           <Section icon={CalendarClock} tone="amber" title="Date requested — awaiting shop confirmation">
-            <p className="text-sm text-zinc-800">Customer chose <strong>{longDate(pendingRequest.start_date)}</strong></p>
+            <p className="text-sm text-zinc-800">
+              {pendingRequest.source === 'calendar' ? 'Customer requested ' : 'Customer chose '}
+              <strong>{longDate(pendingRequest.start_date)}</strong>
+              {pendingRequest.source === 'calendar' ? ' from your calendar' : ''}
+            </p>
             <p className="text-xs text-zinc-500 mt-0.5">Requested {formatDateTime(pendingRequest.requested_at)}. Nothing is reserved until you confirm.</p>
-            {!a.canConfirm && !readOnly && (
+            {state.pendingRequestBlocked ? (
+              <p className="text-xs text-red-700 mt-1">
+                This date is now blocked on your calendar. Unblock it on the Schedule page to confirm it, or ask the customer to choose another date. They can pick a new one from their quote link.
+              </p>
+            ) : !a.canConfirm && !readOnly && (
               <p className="text-xs text-amber-700 mt-1">{a.offerBlockedReason ?? 'This request can no longer be confirmed. Offer new dates.'}</p>
             )}
           </Section>
@@ -199,6 +207,11 @@ export default function LeadSchedulePanel({
 
         {!reservation && !pendingRequest && !activeOffer && !draftOffer && a.offerBlockedReason && !readOnly && (
           <p className="text-sm text-zinc-500">{a.offerBlockedReason}</p>
+        )}
+        {!reservation && !pendingRequest && !activeOffer && !draftOffer && a.canOffer && (
+          <p className="text-sm text-zinc-500">
+            Waiting for the customer to request a start date from their quote link. You can also offer specific dates instead.
+          </p>
         )}
       </div>
 

@@ -1,6 +1,7 @@
 // Pure scheduling rules for the staff UI. The database functions in
-// 20261007120000_add_production_scheduling.sql are authoritative; these only
-// decide which actions to offer. No runtime imports, so it is unit tested.
+// 20261007120000_add_production_scheduling.sql and
+// 20261028120000_add_customer_calendar_scheduling.sql are authoritative; these
+// only decide which actions to offer. No runtime imports, so it is unit tested.
 import type { DateOnly } from './scheduleDates'
 
 export type ScheduleOfferStatus = 'draft' | 'active' | 'superseded' | 'invalidated' | 'withdrawn' | 'closed'
@@ -23,7 +24,10 @@ export type ScheduleOffer = {
 
 export type ScheduleRequest = {
   id: string
-  offer_id: string
+  // 'offer': one of the shop's offered dates; 'calendar': picked by the
+  // customer from the shop's calendar (no offer).
+  source: 'offer' | 'calendar'
+  offer_id: string | null
   quote_id: string
   start_date: DateOnly
   status: ScheduleRequestStatus
@@ -57,6 +61,8 @@ export type LeadScheduleState = {
   draftOffer: ScheduleOffer | null
   activeOffer: ScheduleOffer | null
   pendingRequest: ScheduleRequest | null
+  // The pending request's start date is blocked on the shop's calendar.
+  pendingRequestBlocked?: boolean
   reservation: ScheduleReservation | null
   pastReservations: ScheduleReservation[]
   currentQuote: QuoteSummary | null
@@ -98,10 +104,16 @@ export function scheduleActions(leadStatus: string, state: LeadScheduleState, re
     ? state.currentQuote
     : null
 
+  // Offered choices need their options to still be active; calendar choices
+  // have no offer (sending options supersedes them).
+  const request = state.pendingRequest
+  const requestCurrent = !!request && request.quote_id === state.currentQuote?.id && (request.source === 'calendar'
+    ? !state.activeOffer
+    : !!state.activeOffer && request.offer_id === state.activeOffer.id)
+
   return {
     canOffer: offerBlockedReason === null,
-    canConfirm: !readOnly && !started && !closed && approved && !!state.pendingRequest && !!state.activeOffer
-      && state.pendingRequest.offer_id === state.activeOffer.id && state.pendingRequest.quote_id === state.currentQuote?.id,
+    canConfirm: !readOnly && !started && !closed && approved && requestCurrent && !state.pendingRequestBlocked,
     canCancel: !readOnly && !started && !!reservation,
     offerLabel: reservation ? 'Reschedule' : state.activeOffer ? 'Offer new dates' : 'Offer dates',
     offerBlockedReason,

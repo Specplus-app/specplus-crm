@@ -135,7 +135,8 @@ for (const isCustom of [false, true]) {
     assert.equal(pub.can_request, true)
     assert.equal(pub.offer.note, 'Mornings work best.')
     assert.deepEqual(pub.offer.options.map((o: any) => o.start_date), [D(3), D(9)], 'deduplicated and sorted')
-    assert.deepEqual(Object.keys(pub.offer.options[0]).sort(), ['id', 'start_date'])
+    assert.deepEqual(Object.keys(pub.offer.options[0]).sort(), ['available', 'id', 'start_date'])
+    assert.equal(pub.calendar, null, 'no calendar while date options are active')
 
     const chosen = pub.offer.options[1]
     const r = await requestDate(quote.public_token, chosen.id)

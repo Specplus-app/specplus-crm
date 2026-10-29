@@ -30,13 +30,24 @@ export async function loadLeadSchedule(leadId: string): Promise<Result<LeadSched
   const offers = ((offersRes.data ?? []) as Record<string, unknown>[]).map(withOptions)
   const reservations = (reservationsRes.data ?? []) as ScheduleReservation[]
   const quote = ((quotesRes.data ?? []) as QuoteSummary[])[0] ?? null
+  const pendingRequest = ((requestsRes.data ?? []) as (ScheduleRequest & { shop_id: string })[])[0] ?? null
+
+  // Whether the requested date has since been blocked (confirmation would be
+  // refused). A failed check leaves confirming to the database's own check.
+  let pendingRequestBlocked = false
+  if (pendingRequest) {
+    const blockedRes = await supabase.from('shop_blocked_dates').select('blocked_date')
+      .eq('shop_id', pendingRequest.shop_id).eq('blocked_date', pendingRequest.start_date).maybeSingle()
+    pendingRequestBlocked = !blockedRes.error && !!blockedRes.data
+  }
 
   return {
     data: {
       version: Number(stateRes.data?.version ?? 0),
       draftOffer: offers.find((o) => o.status === 'draft') ?? null,
       activeOffer: offers.find((o) => o.status === 'active') ?? null,
-      pendingRequest: ((requestsRes.data ?? []) as ScheduleRequest[])[0] ?? null,
+      pendingRequest,
+      pendingRequestBlocked,
       reservation: reservations.find((r) => r.status === 'active') ?? null,
       pastReservations: reservations.filter((r) => r.status !== 'active'),
       currentQuote: quote ? { ...quote, grand_total: Number(quote.grand_total) || 0 } : null,

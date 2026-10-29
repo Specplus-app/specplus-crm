@@ -5,12 +5,14 @@ import {
   requestErrorMessage, type PublicSchedule,
 } from '../lib/schedule'
 import { formatDateOnly } from '../lib/scheduleDates'
-import { AlertCircle, CalendarCheck, CalendarClock, CalendarDays, Check, Loader2, RefreshCw } from 'lucide-react'
+import CustomerDatePicker from './CustomerDatePicker'
+import { AlertCircle, CalendarCheck, CalendarClock, CalendarDays, CalendarX, Check, Loader2, MessageSquare, RefreshCw } from 'lucide-react'
 
 const longDate = (d: string) => formatDateOnly(d, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
 
 // Production date choice on the customer's quote page. Shows only this
-// project's active options, its own pending request and its own booking.
+// project's options or the shop's bookable calendar (window and blocked days,
+// never other customers' jobs), its own pending request and its own booking.
 export default function CustomerSchedule({ token, shopName, staffPreview, quoteApproved }: {
   token: string
   shopName: string
@@ -43,11 +45,17 @@ export default function CustomerSchedule({ token, shopName, staffPreview, quoteA
   }, [load])
 
   const submit = async () => {
-    const option = state.data?.offer?.options.find((o) => o.id === state.selected)
+    // Offered dates take precedence; otherwise the calendar choice.
+    const offered = state.data?.offer?.options.find((o) => o.id === state.selected)
+    const option = state.data?.offer
+      ? offered && { id: offered.id, start_date: offered.start_date }
+      : state.data?.calendar && state.selectedDate ? { id: null, start_date: state.selectedDate } : undefined
     if (!option || state.submitting) return
     dispatch({ type: 'submitStart' })
     try {
-      const { data, error } = await supabase.rpc('request_schedule_date', { p_token: token, p_option_id: option.id })
+      const { data, error } = option.id
+        ? await supabase.rpc('request_schedule_date', { p_token: token, p_option_id: option.id })
+        : await supabase.rpc('request_schedule_calendar_date', { p_token: token, p_start_date: option.start_date })
       if (error) {
         dispatch({ type: 'submitRejected', message: REQUEST_FAILED })
         return
@@ -113,7 +121,11 @@ export default function CustomerSchedule({ token, shopName, staffPreview, quoteA
   }
 
   const { offer, request, booking } = state.data!
-  const { selected, submitting } = state
+  const calendar = offer ? null : state.data!.calendar ?? null
+  const { selected, selectedDate, submitting } = state
+  const requestUnavailable = request?.available === false
+  const calendarRequest = request?.source === 'calendar' ? request : null
+  const unchangedCalendarChoice = !!calendarRequest && !requestUnavailable && selectedDate === calendarRequest.start_date
 
   return (
     <div className={card}>
@@ -145,30 +157,26 @@ export default function CustomerSchedule({ token, shopName, staffPreview, quoteA
           </p>
           {offer.note && <p className="text-sm text-slate-300 whitespace-pre-wrap bg-white/5 border border-white/10 rounded-xl px-3 py-2 mb-3">{offer.note}</p>}
 
-          {request && (
-            <div className="flex items-start gap-3 bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 mb-3 text-sm text-amber-100">
-              <CalendarClock size={18} className="flex-shrink-0 mt-0.5" />
-              <p><span className="font-semibold">Date requested — awaiting shop confirmation.</span> You asked to start {longDate(request.start_date)}.</p>
-            </div>
-          )}
+          {request && <RequestStatus request={request} shopName={shopName} />}
 
           <div className="space-y-2" role="radiogroup" aria-label="Production start dates">
             {(offer.options ?? []).map((o) => {
               const active = selected === o.id
+              const unavailable = o.available === false
               return (
                 <button
                   key={o.id}
                   type="button"
                   role="radio"
                   aria-checked={active}
-                  disabled={staffPreview || submitting}
+                  disabled={staffPreview || submitting || unavailable}
                   onClick={() => dispatch({ type: 'select', optionId: o.id })}
                   className={`w-full flex items-center justify-between gap-3 rounded-xl border px-4 py-3 text-left text-sm transition-colors disabled:opacity-60 ${
-                    active ? 'border-cobalt-400 bg-cobalt-500/15 text-white' : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
+                    active && !unavailable ? 'border-cobalt-400 bg-cobalt-500/15 text-white' : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
                   }`}
                 >
-                  {longDate(o.start_date)}
-                  {active && <Check size={16} className="text-cobalt-300" />}
+                  <span className={unavailable ? 'line-through text-slate-400' : ''}>{longDate(o.start_date)}</span>
+                  {unavailable ? <span className="text-xs text-slate-400">No longer available</span> : active && <Check size={16} className="text-cobalt-300" />}
                 </button>
               )
             })}
@@ -180,15 +188,75 @@ export default function CustomerSchedule({ token, shopName, staffPreview, quoteA
           ) : (
             <button
               onClick={submit}
-              disabled={!selected || submitting || selected === request?.option_id}
+              disabled={!selected || submitting || (selected === request?.option_id && !requestUnavailable)}
               className="w-full flex items-center justify-center gap-2 mt-4 bg-cobalt-600 hover:bg-cobalt-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl px-5 py-3 transition-colors"
             >
               {submitting && <Loader2 size={16} className="animate-spin" />}
-              {request ? (selected === request.option_id ? 'Date requested' : 'Change requested date') : 'Request this date'}
+              {request ? (selected === request.option_id && !requestUnavailable ? 'Date requested' : 'Change requested date') : 'Request this date'}
             </button>
           )}
         </>
       )}
+
+      {calendar && (
+        <>
+          <p className="text-sm text-slate-400 mt-3 mb-3">
+            Choose a production start date. {shopName} will review it and confirm before it is booked.
+          </p>
+
+          {calendarRequest && <RequestStatus request={calendarRequest} shopName={shopName} />}
+
+          <CustomerDatePicker
+            calendar={calendar}
+            selected={selectedDate}
+            requested={calendarRequest?.start_date ?? null}
+            disabled={staffPreview || submitting}
+            onSelect={(date) => dispatch({ type: 'selectDate', date })}
+          />
+
+          <p className="flex items-start gap-2 text-xs text-slate-400 mt-3">
+            <MessageSquare size={13} className="flex-shrink-0 mt-0.5" />
+            <span>Need a date after {longDate(calendar.latest)}, or one that isn't available? Send {shopName} a message below.</span>
+          </p>
+
+          {state.requestError && <p className="text-sm text-red-300 mt-3" role="alert">{state.requestError}</p>}
+          {staffPreview ? (
+            <p className="text-sm text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2 mt-3">Staff preview — customers choose a date from their own link.</p>
+          ) : (
+            <button
+              onClick={submit}
+              disabled={!selectedDate || submitting || unchangedCalendarChoice}
+              className="w-full flex items-center justify-center gap-2 mt-4 bg-cobalt-600 hover:bg-cobalt-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl px-5 py-3 transition-colors"
+            >
+              {submitting && <Loader2 size={16} className="animate-spin" />}
+              {unchangedCalendarChoice
+                ? 'Date requested'
+                : selectedDate
+                  ? `${calendarRequest ? 'Change request to' : 'Request'} ${formatDateOnly(selectedDate, { weekday: 'short', month: 'short', day: 'numeric' })}`
+                  : 'Select a start date'}
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// The customer's pending request: awaiting confirmation, or no longer
+// available because the shop blocked the date (choose another).
+function RequestStatus({ request, shopName }: { request: { start_date: string; available?: boolean }; shopName: string }) {
+  if (request.available === false) {
+    return (
+      <div className="flex items-start gap-3 bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3 mb-3 text-sm text-red-100" role="status">
+        <CalendarX size={18} className="flex-shrink-0 mt-0.5" />
+        <p><span className="font-semibold">{shopName} is no longer available on {longDate(request.start_date)}.</span> Please choose another date.</p>
+      </div>
+    )
+  }
+  return (
+    <div className="flex items-start gap-3 bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 mb-3 text-sm text-amber-100" role="status">
+      <CalendarClock size={18} className="flex-shrink-0 mt-0.5" />
+      <p><span className="font-semibold">Date requested — awaiting shop confirmation.</span> You asked to start {longDate(request.start_date)}.</p>
     </div>
   )
 }

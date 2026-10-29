@@ -4,18 +4,23 @@ import { useAuth } from '../lib/auth'
 import { getWorkflowMeta, workflowStatusFor } from '../lib/supabase'
 import { jobPosition, type CalendarJob } from '../lib/calendarContext'
 import { useShopCalendar } from '../lib/useShopCalendar'
+import { useShopAvailability } from '../lib/useShopAvailability'
+import { useShopBilling } from '../lib/billing'
+import ScheduleAvailability from '../components/ScheduleAvailability'
 import {
-  calendarDays, formatDateOnly, formatDateRange, formatMonth, isSameMonth, jobsByDay, shiftFocus, startOfMonth,
+  addDays, calendarDays, formatDateOnly, formatDateRange, formatMonth, isSameMonth, jobsByDay, shiftFocus, startOfMonth,
   todayDateOnly, type CalendarView, type DateOnly,
 } from '../lib/scheduleDates'
-import { AlertCircle, CalendarClock, CalendarDays, ChevronLeft, ChevronRight, Package, Truck } from 'lucide-react'
+import { AlertCircle, Ban, CalendarClock, CalendarDays, ChevronLeft, ChevronRight, Package, Truck } from 'lucide-react'
 
 // Production calendar (Month or Week): confirmed jobs on every date they
 // cover (including jobs spanning into or out of the range; overlaps are
-// allowed) and, separately, customer date requests that still await shop
-// confirmation.
+// allowed), the shop's blocked dates and, separately, customer date requests
+// that still await shop confirmation. The availability panel sets how far
+// ahead customers can request dates and which dates are blocked.
 export default function SchedulePage() {
   const { profile } = useAuth()
+  const { readOnly } = useShopBilling()
   const navigate = useNavigate()
   const [view, setView] = useState<CalendarView>('month')
   // Any date inside the week/month on screen; switching views keeps it.
@@ -27,6 +32,9 @@ export default function SchedulePage() {
   const shopId = profile?.shop_id ?? null
   // Shared with the lead's scheduling dialogs (src/lib/useShopCalendar.ts).
   const { jobs, pending, loading, loaded, error, refresh: load } = useShopCalendar(shopId, rangeStart, rangeEnd)
+  // From yesterday, the same one-day tolerance the database applies.
+  const availability = useShopAvailability(shopId, addDays(today, -1))
+  const blocked = useMemo(() => new Set(availability.data?.blockedDates ?? []), [availability.data])
 
   const byDay = useMemo(() => jobsByDay(jobs, days), [jobs, days])
   const open = (leadId: string) => navigate(`/dashboard/leads/${leadId}`)
@@ -54,6 +62,17 @@ export default function SchedulePage() {
           </div>
         </div>
 
+        {shopId && (
+          <ScheduleAvailability
+            shopId={shopId}
+            readOnly={readOnly}
+            availability={availability.data}
+            loading={availability.loading}
+            error={availability.error}
+            onChanged={availability.refresh}
+          />
+        )}
+
         {error && (
           <div className="flex items-start justify-between gap-2 text-sm text-red-200 bg-red-500/10 border border-red-500/30 rounded-xl px-3 py-2 mb-4">
             <span className="flex items-center gap-2"><AlertCircle size={15} /> Could not load the schedule: {error}</span>
@@ -70,7 +89,7 @@ export default function SchedulePage() {
         ) : (
           <>
             {view === 'month' ? (
-              <MonthGrid days={days} focus={focus} today={today} byDay={byDay} onOpen={open} onOpenWeek={openWeek} />
+              <MonthGrid days={days} focus={focus} today={today} byDay={byDay} blocked={blocked} onOpen={open} onOpenWeek={openWeek} />
             ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-2">
               {days.map((day) => {
@@ -84,6 +103,7 @@ export default function SchedulePage() {
                       </span>
                       <span className="text-[11px] text-slate-500">{dayJobs.length} {dayJobs.length === 1 ? 'job' : 'jobs'}</span>
                     </header>
+                    {blocked.has(day) && <BlockedBadge />}
                     {dayJobs.length === 0 ? (
                       <p className="text-[11px] text-slate-600">No confirmed jobs</p>
                     ) : (
@@ -161,11 +181,20 @@ const MAX_CHIPS = 3
 // more" and the day number open that week). Narrow screens keep the grid
 // for orientation with a per-day job count, plus a day-by-day list of the
 // month's jobs using the full cards.
-function MonthGrid({ days, focus, today, byDay, onOpen, onOpenWeek }: {
+function BlockedBadge() {
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-200 bg-red-500/15 border border-red-500/30 rounded px-1.5 py-0.5 mb-1.5">
+      <Ban size={10} /> Blocked
+    </span>
+  )
+}
+
+function MonthGrid({ days, focus, today, byDay, blocked, onOpen, onOpenWeek }: {
   days: DateOnly[]
   focus: DateOnly
   today: DateOnly
   byDay: Map<DateOnly, CalendarJob[]>
+  blocked: Set<DateOnly>
   onOpen: (leadId: string) => void
   onOpenWeek: (day: DateOnly) => void
 }) {
@@ -180,10 +209,12 @@ function MonthGrid({ days, focus, today, byDay, onOpen, onOpenWeek }: {
         {days.map((day) => {
           const dayJobs = byDay.get(day) ?? []
           const isToday = day === today
+          const isBlocked = blocked.has(day)
           return (
             <section
               key={day}
-              className={`min-w-0 rounded-lg md:rounded-xl border p-1 md:p-1.5 min-h-[3.25rem] md:min-h-[7rem] ${isToday ? 'border-cobalt-500/60 bg-cobalt-500/5' : 'border-white/10 bg-obsidian-900/40'} ${isSameMonth(day, month) ? '' : 'opacity-50'}`}
+              aria-label={isBlocked ? `${formatDateOnly(day, { weekday: 'long', month: 'long', day: 'numeric' })}, blocked` : undefined}
+              className={`min-w-0 rounded-lg md:rounded-xl border p-1 md:p-1.5 min-h-[3.25rem] md:min-h-[7rem] ${isToday ? 'border-cobalt-500/60 bg-cobalt-500/5' : isBlocked ? 'border-red-500/30 bg-red-500/[0.07]' : 'border-white/10 bg-obsidian-900/40'} ${isSameMonth(day, month) ? '' : 'opacity-50'}`}
             >
               <header className="flex items-center justify-between">
                 <button
@@ -196,7 +227,9 @@ function MonthGrid({ days, focus, today, byDay, onOpen, onOpenWeek }: {
                 {dayJobs.length > 0 && (
                   <span className="hidden md:inline text-[10px] text-slate-500">{dayJobs.length} {dayJobs.length === 1 ? 'job' : 'jobs'}</span>
                 )}
+                {isBlocked && <Ban size={11} className="md:hidden text-red-300" aria-hidden="true" />}
               </header>
+              {isBlocked && <span className="hidden md:inline-flex items-center gap-1 text-[10px] font-semibold text-red-200 mt-0.5"><Ban size={10} /> Blocked</span>}
               {dayJobs.length > 0 && (
                 <span className="md:hidden block text-center mt-1 text-[10px] font-semibold text-cobalt-300">{dayJobs.length}</span>
               )}
