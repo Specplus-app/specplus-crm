@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { supabase, Vehicle, VehiclePart, PartGroup, PartPaintStyle, PartOption, Shop, formatCurrency, getHighlightColor, ShipSize, shipSizeRank, estimateLeadTimeDays, DEFAULT_LEAD_TIME_MULTIPLIER, shapedPartsOnView } from '../lib/supabase'
 import { pickPartAtPoint } from '../lib/svgHit'
 import CustomBuildFlow from '../components/CustomBuildFlow'
-import { Shield, Car, ArrowLeft, ArrowRight, Check, Mail, Phone, User, MapPin, Send, CheckCircle2, AlertCircle, Layers, X, Palette, Plus, Clock, Calendar, PencilRuler, Hash, Minus, Hand, RotateCcw } from 'lucide-react'
+import { Shield, Car, ArrowLeft, ArrowRight, Check, Mail, Phone, User, MapPin, Send, CheckCircle2, AlertCircle, Layers, X, Palette, Plus, Clock, Calendar, Hash, Minus, Hand, RotateCcw } from 'lucide-react'
 
 type SelectedPart = {
   id: string
@@ -520,13 +520,31 @@ export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?
         {/* Vehicle selection */}
         {!selectedVehicle ? (
           <>
-            <h2 className="text-xl font-bold mb-1 text-white">Choose Your Vehicle</h2>
-            <p className="text-sm text-slate-400 mb-6">Select a vehicle to start customizing</p>
+            <button
+              onClick={() => setCustomMode(true)}
+              className={`w-full text-left rounded-2xl border transition-all flex items-center gap-4 p-4 mb-8 group ${
+                vehicles.length === 0
+                  ? 'bg-cobalt-600/10 border-cobalt-500/50 hover:border-cobalt-500'
+                  : 'bg-obsidian-900/60 backdrop-blur-xl border-white/10 hover:border-cobalt-500/50'
+              }`}
+            >
+              <CustomBuildIcon />
+              <div className="min-w-0 flex-1">
+                <h3 className="font-semibold text-slate-100">Start Your Custom Build</h3>
+                <p className="text-sm text-slate-400 mt-0.5">
+                  Upload photos of your vehicle, choose the parts you’d like customized, and request a quote.
+                </p>
+              </div>
+              <ArrowRight size={18} className="text-slate-500 group-hover:text-cobalt-400 transition-colors flex-shrink-0" />
+            </button>
+
+            <h2 className="text-xl font-bold mb-1 text-white">Vehicle Gallery</h2>
+            <p className="text-sm text-slate-400 mb-6">Browse available vehicles and start customizing.</p>
             {vehicles.length === 0 ? (
               <div className="text-center py-12 mb-6">
                 <Car size={40} className="mx-auto text-slate-700 mb-3" />
                 <p className="text-slate-400 font-medium">No preset vehicles available yet</p>
-                <p className="text-sm text-slate-500 mt-1">No problem — you can build a quote from photos of your own truck below.</p>
+                <p className="text-sm text-slate-500 mt-1">No problem — you can build a quote from photos of your own truck above.</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -557,26 +575,6 @@ export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?
                 ))}
               </div>
             )}
-
-            <button
-              onClick={() => setCustomMode(true)}
-              className={`w-full text-left rounded-2xl border transition-all flex items-center gap-4 p-4 group ${
-                vehicles.length === 0
-                  ? 'bg-cobalt-600/10 border-cobalt-500/50 hover:border-cobalt-500'
-                  : 'bg-obsidian-900/60 backdrop-blur-xl border-white/10 hover:border-cobalt-500/50 mt-4'
-              }`}
-            >
-              <div className="w-12 h-12 rounded-xl bg-cobalt-600/20 flex items-center justify-center flex-shrink-0">
-                <PencilRuler size={22} className="text-cobalt-400" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <h3 className="font-semibold text-slate-100">Don't see your truck? Build from your own photos</h3>
-                <p className="text-sm text-slate-400 mt-0.5">
-                  Upload photos of your vehicle, mark the parts you want done, and request a custom quote.
-                </p>
-              </div>
-              <ArrowRight size={18} className="text-slate-500 group-hover:text-cobalt-400 transition-colors flex-shrink-0" />
-            </button>
           </>
         ) : (
           <>
@@ -1003,6 +1001,31 @@ type PartConfigState = {
   styleId: string | null
   optionIds: Set<string>
   type: 'new' | 'send'
+}
+
+// Pickup silhouette for the custom build card, with the door panel
+// highlighted to suggest choosing parts to customize.
+function CustomBuildIcon() {
+  return (
+    <svg viewBox="3 5 58.5 21" width="76" height="27" fill="none" aria-hidden="true" className="flex-shrink-0">
+      <path
+        d="M4 19V12.5H29.5V8.2C29.5 7 30.4 6 31.6 6H40.4C41.3 6 42.1 6.4 42.7 7.1L47.4 12.3H55.6C58.3 12.6 60.3 14.5 60.5 17.2V19.4C60.5 20 60 20.5 59.4 20.5H55.6A5 5 0 0 0 45.6 20.5H22.4A5 5 0 0 0 12.4 20.5H5.1C4.5 20.5 4 20 4 19.4Z"
+        className="fill-white/5 stroke-slate-300"
+        strokeWidth={1.5}
+        strokeLinejoin="round"
+      />
+      <path d="M31.8 8.4H40L43.6 12.3H31.8Z" className="fill-slate-300/20 stroke-slate-300" strokeWidth={1} strokeLinejoin="round" />
+      <path d="M31.2 13.8H44.8V18.9C44.8 19.4 44.4 19.7 43.9 19.7H32.1C31.6 19.7 31.2 19.4 31.2 18.9Z" className="fill-cobalt-500" />
+      <path d="M6 14.6H27.6" className="stroke-slate-300/45" strokeWidth={1} strokeLinecap="round" />
+      <path d="M58.6 14.6H60" className="stroke-slate-300" strokeWidth={1.2} strokeLinecap="round" />
+      {[17.4, 50.6].map((cx) => (
+        <g key={cx}>
+          <circle cx={cx} cy={21.2} r={3.7} className="fill-obsidian-950 stroke-slate-300" strokeWidth={1.5} />
+          <circle cx={cx} cy={21.2} r={1.2} className="fill-slate-300" />
+        </g>
+      ))}
+    </svg>
+  )
 }
 
 function PartDetailModal({
