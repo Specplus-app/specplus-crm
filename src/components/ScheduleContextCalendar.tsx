@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useShopCalendar } from '../lib/useShopCalendar'
 import { useShopAvailability } from '../lib/useShopAvailability'
-import { dayDetails, inspectableDay, requestsByDay } from '../lib/calendarContext'
+import { DAY_SHADE_CLASSES, dayDetails, dayShades, inspectableDay, requestsByDay } from '../lib/calendarContext'
+import DayShadeLegend from './DayShadeLegend'
 import {
   addDays, addMonths, formatDateOnly, formatDateRange, formatMonth, isOnDay, isSameMonth, jobsByDay, monthGridDays, startOfMonth,
   todayDateOnly, type DateOnly,
@@ -37,10 +38,17 @@ export default function ScheduleContextCalendar({ shopId, leadId, mode, initialF
   const cal = useShopCalendar(shopId, days[0], days[days.length - 1])
   // Blocked dates (Schedule page). The database refuses offering or
   // confirming them; shown here so staff see it first.
-  const availability = useShopAvailability(shopId, addDays(today, -1))
+  const blockedFrom = addDays(today, -1)
+  const availability = useShopAvailability(shopId, blockedFrom)
   const blocked = useMemo(() => new Set(availability.data?.blockedDates ?? []), [availability.data])
   const refreshAll = () => { cal.refresh(); availability.refresh() }
   const jobsOn = useMemo(() => jobsByDay(cal.jobs, days), [cal.jobs, days])
+  // Workload shading, the same rule as the Schedule page. Neutral until both
+  // the jobs and the blocked dates are loaded.
+  const shades = useMemo(
+    () => dayShades(days, cal.loaded ? jobsOn : null, availability.data ? blocked : null, blockedFrom),
+    [days, cal.loaded, jobsOn, availability.data, blocked, blockedFrom],
+  )
   const requestsOn = useMemo(() => requestsByDay(cal.pending, days), [cal.pending, days])
   // Only a day inside the displayed range, paired with that range's rows.
   const day = inspectableDay(inspected, days)
@@ -66,10 +74,11 @@ export default function ScheduleContextCalendar({ shopId, leadId, mode, initialF
         </div>
       </div>
 
+      <DayShadeLegend theme="light" className="mb-1.5" />
       <Legend mode={mode.kind} />
 
       {availability.error && !availability.data && (
-        <p className="text-[11px] text-amber-700 mb-2">Couldn't load blocked dates, so they aren't marked here. Sending or confirming still checks them.</p>
+        <p className="text-[11px] text-amber-700 mb-2">Couldn't load blocked dates, so they aren't marked and days aren't colored. Sending or confirming still checks them.</p>
       )}
       {cal.error && (
         <div className="flex items-start gap-1.5 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-2.5 py-2 mb-2">
@@ -99,6 +108,7 @@ export default function ScheduleContextCalendar({ shopId, leadId, mode, initialF
             const focused = d === day
             const past = d < today
             const isBlocked = blocked.has(d)
+            const shade = DAY_SHADE_CLASSES.light[shades.get(d) ?? 'unknown']
             return (
               <button
                 key={d}
@@ -107,11 +117,13 @@ export default function ScheduleContextCalendar({ shopId, leadId, mode, initialF
                 aria-pressed={focused}
                 aria-label={`${formatDateOnly(d, { weekday: 'long', month: 'long', day: 'numeric' })}: ${jobCount} confirmed ${jobCount === 1 ? 'job' : 'jobs'}, ${requestCount} pending ${requestCount === 1 ? 'request' : 'requests'}${isBlocked ? ', blocked' : ''}${offered ? ', offered' : ''}${proposed ? ', this booking' : ''}`}
                 className={[
-                  'relative h-11 sm:h-12 rounded-lg border text-left px-1 py-0.5 transition-colors min-w-0',
-                  offered ? 'border-brand-500 bg-brand-50' : proposed ? 'border-emerald-400 bg-emerald-50' : isBlocked ? 'border-red-200 bg-red-50 hover:bg-red-100' : 'border-zinc-200 bg-white hover:bg-zinc-50',
+                  'relative h-11 sm:h-12 rounded-lg text-left px-1 py-0.5 transition-[filter] hover:brightness-95 min-w-0',
+                  // Offered dates and the booking being confirmed keep the
+                  // day's shade and get a brand outline on top (no layout shift).
+                  `border ${shade.border} ${shade.bg}`,
+                  offered || proposed ? 'outline outline-2 -outline-offset-2 outline-brand-500' : '',
                   focused ? 'ring-2 ring-zinc-900/70' : '',
-                  isSameMonth(d, month) ? '' : 'opacity-40',
-                  past && !offered && !proposed ? 'bg-zinc-50 text-zinc-400' : '',
+                  !isSameMonth(d, month) ? 'opacity-40' : past && !offered && !proposed ? 'opacity-60' : '',
                 ].join(' ')}
               >
                 <span className={`text-[11px] font-semibold ${d === today ? 'text-brand-600' : 'text-zinc-700'}`}>{Number(d.slice(8))}</span>
@@ -122,7 +134,7 @@ export default function ScheduleContextCalendar({ shopId, leadId, mode, initialF
                     <span className="text-[9px] leading-none font-semibold rounded bg-zinc-700 text-white px-1 py-0.5" title={`${jobCount} confirmed`}>{jobCount}</span>
                   )}
                   {requestCount > 0 && (
-                    <span className="text-[9px] leading-none font-semibold rounded border border-dashed border-amber-500 bg-amber-50 text-amber-800 px-1 py-[1px]" title={`${requestCount} pending`}>{requestCount}</span>
+                    <span className="text-[9px] leading-none font-semibold rounded border border-dashed border-amber-500 bg-white text-amber-800 px-1 py-[1px]" title={`${requestCount} pending`}>{requestCount}</span>
                   )}
                 </span>
               </button>
@@ -195,11 +207,10 @@ function Legend({ mode }: { mode: CalendarMode['kind'] }) {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-zinc-500 mb-2">
       <span className="flex items-center gap-1"><span className="rounded bg-zinc-700 text-white px-1 font-semibold">2</span> Confirmed jobs</span>
-      <span className="flex items-center gap-1"><span className="rounded border border-dashed border-amber-500 bg-amber-50 text-amber-800 px-1 font-semibold">1</span> Pending requests</span>
-      <span className="flex items-center gap-1"><span className="w-3 h-3 rounded border border-red-200 bg-red-50" /> Blocked</span>
+      <span className="flex items-center gap-1"><span className="rounded border border-dashed border-amber-500 bg-white text-amber-800 px-1 font-semibold">1</span> Pending requests (don't change day colors)</span>
       {mode === 'offer'
-        ? <span className="flex items-center gap-1"><span className="w-3 h-3 rounded border border-brand-500 bg-brand-50" /> Offered (not reserved)</span>
-        : <span className="flex items-center gap-1"><span className="w-3 h-3 rounded border border-emerald-400 bg-emerald-50" /> This booking</span>}
+        ? <span className="flex items-center gap-1"><span className="w-3 h-3 rounded border-2 border-brand-500" /> Offered (not reserved)</span>
+        : <span className="flex items-center gap-1"><span className="w-3 h-3 rounded border-2 border-brand-500" /> This booking</span>}
     </div>
   )
 }

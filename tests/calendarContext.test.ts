@@ -3,11 +3,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  MAX_OFFER_DATES, dayDetails, inspectableDay, jobPosition, loadShopCalendar, requestsByDay, toggleOfferDate,
+  MAX_OFFER_DATES, dayDetails, dayShade, dayShades, inspectableDay, jobPosition, loadShopCalendar, requestsByDay, toggleOfferDate,
 } from '../src/lib/calendarContext.ts'
 import { agendaKey, agendaReducer, initialAgenda } from '../src/lib/agendaState.ts'
 import { validateOfferDates } from '../src/lib/scheduleRules.ts'
-import { monthGridDays } from '../src/lib/scheduleDates.ts'
+import { jobsByDay, monthGridDays } from '../src/lib/scheduleDates.ts'
 
 const job = (id: string, start: string, ready: string, lead_id = `lead-${id}`) => ({ id, lead_id, start_date: start, estimated_ready_date: ready, lead: null })
 const request = (id: string, start: string, lead_id = `lead-${id}`) => ({ id, lead_id, start_date: start, requested_at: '2026-10-20T12:00:00Z', lead: null })
@@ -142,4 +142,37 @@ test('month navigation never shows an inspected day with another month\'s data',
   // Offered dates are dialog state and unaffected by navigation.
   const offered = toggleOfferDate(toggleOfferDate([], '2026-11-10', '2026-10-27').dates, '2026-12-15', '2026-10-27').dates
   assert.deepEqual(offered, ['2026-11-10', '2026-12-15'])
+})
+
+test('day shading: red for blocked days, then yellow for confirmed jobs, else green', () => {
+  assert.equal(dayShade(0, false), 'open')
+  assert.equal(dayShade(2, false), 'busy')
+  assert.equal(dayShade(0, true), 'blocked')
+  assert.equal(dayShade(3, true), 'blocked', 'blocked takes precedence over jobs')
+})
+
+test('day shading stays neutral until both jobs and blocked dates are loaded', () => {
+  assert.equal(dayShade(null, false), 'unknown', 'jobs not loaded')
+  assert.equal(dayShade(0, null), 'unknown', 'blocked dates not loaded: never claim green')
+  assert.equal(dayShade(2, null), 'unknown')
+  const days = ['2026-11-02', '2026-11-03']
+  assert.deepEqual([...dayShades(days, null, new Set(), '2026-11-01').values()], ['unknown', 'unknown'])
+  assert.deepEqual([...dayShades(days, new Map(), null, '2026-11-01').values()], ['unknown', 'unknown'])
+  // Blocked dates are loaded from a cutoff; days before it aren't known.
+  assert.deepEqual([...dayShades(days, new Map(), new Set(), '2026-11-03').values()], ['unknown', 'open'])
+})
+
+test('day shading counts confirmed jobs across their whole range and ignores pending requests', () => {
+  const days = ['2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06']
+  const jobs = [job('a', '2026-11-02', '2026-11-04'), job('b', '2026-11-04', '2026-11-04')]
+  // Pending requests are not passed in at all: they can't change a shade.
+  const shades = dayShades(days, jobsByDay(jobs, days), new Set(['2026-11-03', '2026-11-06']), '2026-11-01')
+  assert.deepEqual([...shades.entries()], [
+    ['2026-11-01', 'open'],
+    ['2026-11-02', 'busy'],    // start date
+    ['2026-11-03', 'blocked'], // inside a job, but blocked wins
+    ['2026-11-04', 'busy'],    // estimated-ready date, overlapping jobs
+    ['2026-11-05', 'open'],
+    ['2026-11-06', 'blocked'],
+  ])
 })

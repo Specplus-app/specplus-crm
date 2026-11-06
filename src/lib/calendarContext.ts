@@ -104,6 +104,71 @@ export async function loadShopCalendar(client: SupabaseClient, shopId: string, r
   }
 }
 
+// Day shading for the staff calendars (Schedule page and the lead's
+// scheduling dialogs). It only describes workload; it never changes what can
+// be booked, and nothing is blocked automatically.
+//   blocked: the shop blocked the day (takes precedence)
+//   busy:    one or more confirmed jobs cover the day (start to estimated ready)
+//   open:    no confirmed jobs
+//   unknown: jobs or blocked dates aren't loaded, so no color is claimed
+// Pending customer requests never affect the shade.
+export type DayShade = 'open' | 'busy' | 'blocked' | 'unknown'
+
+export function dayShade(confirmedJobs: number | null, blocked: boolean | null): DayShade {
+  if (confirmedJobs === null || blocked === null) return 'unknown'
+  if (blocked) return 'blocked'
+  return confirmedJobs > 0 ? 'busy' : 'open'
+}
+
+// Shades for every day shown. jobsByDay comes from scheduleDates.jobsByDay
+// (confirmed jobs on every day of their inclusive range); either input is
+// null while it is loading or after it failed to load. Blocked dates are only
+// loaded from `blockedFrom` on, so earlier days stay neutral.
+export function dayShades(
+  days: readonly DateOnly[],
+  jobsByDay: Map<DateOnly, unknown[]> | null,
+  blockedDates: ReadonlySet<DateOnly> | null,
+  blockedFrom: DateOnly,
+): Map<DateOnly, DayShade> {
+  return new Map(days.map((d) => [
+    d,
+    dayShade(
+      jobsByDay ? (jobsByDay.get(d)?.length ?? 0) : null,
+      blockedDates && d >= blockedFrom ? blockedDates.has(d) : null,
+    ),
+  ]))
+}
+
+export const DAY_SHADE_LABELS: Record<Exclude<DayShade, 'unknown'>, string> = {
+  open: 'No confirmed jobs',
+  busy: 'Jobs scheduled',
+  blocked: 'Unavailable',
+}
+
+// Subtle backgrounds and borders for the dark Schedule page and the light
+// lead dialogs, kept apart so a selection can replace just the border.
+// 'unknown' is the neutral style each calendar already used.
+export type DayShadeStyle = { border: string; bg: string }
+export const DAY_SHADE_CLASSES: Record<'dark' | 'light', Record<DayShade, DayShadeStyle>> = {
+  dark: {
+    open: { border: 'border-emerald-500/30', bg: 'bg-emerald-500/[0.08]' },
+    busy: { border: 'border-amber-400/40', bg: 'bg-amber-400/[0.11]' },
+    blocked: { border: 'border-red-500/45', bg: 'bg-red-500/[0.14]' },
+    unknown: { border: 'border-white/10', bg: 'bg-obsidian-900/40' },
+  },
+  light: {
+    open: { border: 'border-emerald-200', bg: 'bg-emerald-50/70' },
+    busy: { border: 'border-amber-200', bg: 'bg-amber-50' },
+    blocked: { border: 'border-red-200', bg: 'bg-red-50' },
+    unknown: { border: 'border-zinc-200', bg: 'bg-white' },
+  },
+}
+
+export function dayShadeClass(theme: 'dark' | 'light', shade: DayShade | undefined): string {
+  const style = DAY_SHADE_CLASSES[theme][shade ?? 'unknown']
+  return `${style.border} ${style.bg}`
+}
+
 // The day whose details may be shown: only a day inside the displayed grid,
 // whose rows are the ones loaded. A day left over from another month is
 // dropped, so it can never be paired with this range's data and look empty.

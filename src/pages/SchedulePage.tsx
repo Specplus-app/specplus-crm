@@ -2,11 +2,12 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { getWorkflowMeta, workflowStatusFor } from '../lib/supabase'
-import { jobPosition, type CalendarJob } from '../lib/calendarContext'
+import { dayShadeClass, dayShades, jobPosition, type CalendarJob, type DayShade } from '../lib/calendarContext'
 import { useShopCalendar } from '../lib/useShopCalendar'
 import { useShopAvailability } from '../lib/useShopAvailability'
 import { useShopBilling } from '../lib/billing'
 import ScheduleAvailability from '../components/ScheduleAvailability'
+import DayShadeLegend from '../components/DayShadeLegend'
 import {
   addDays, calendarDays, formatDateOnly, formatDateRange, formatMonth, isSameMonth, jobsByDay, shiftFocus, startOfMonth,
   todayDateOnly, type CalendarView, type DateOnly,
@@ -33,10 +34,17 @@ export default function SchedulePage() {
   // Shared with the lead's scheduling dialogs (src/lib/useShopCalendar.ts).
   const { jobs, pending, loading, loaded, error, refresh: load } = useShopCalendar(shopId, rangeStart, rangeEnd)
   // From yesterday, the same one-day tolerance the database applies.
-  const availability = useShopAvailability(shopId, addDays(today, -1))
+  const blockedFrom = addDays(today, -1)
+  const availability = useShopAvailability(shopId, blockedFrom)
   const blocked = useMemo(() => new Set(availability.data?.blockedDates ?? []), [availability.data])
 
   const byDay = useMemo(() => jobsByDay(jobs, days), [jobs, days])
+  // Workload shading (shared with the lead's scheduling calendar). Neutral
+  // until both the jobs and the blocked dates are loaded.
+  const shades = useMemo(
+    () => dayShades(days, loaded ? byDay : null, availability.data ? blocked : null, blockedFrom),
+    [days, loaded, byDay, availability.data, blocked, blockedFrom],
+  )
   const open = (leadId: string) => navigate(`/dashboard/leads/${leadId}`)
   const openWeek = (day: DateOnly) => { setView('week'); setFocus(day) }
   const unit = view === 'week' ? 'week' : 'month'
@@ -88,15 +96,23 @@ export default function SchedulePage() {
           )
         ) : (
           <>
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+              <DayShadeLegend theme="dark" />
+              {!availability.data && (
+                <p className="text-[11px] text-slate-500">
+                  {availability.error ? "Day colors are hidden because blocked dates couldn't be loaded." : 'Loading day colors…'}
+                </p>
+              )}
+            </div>
             {view === 'month' ? (
-              <MonthGrid days={days} focus={focus} today={today} byDay={byDay} blocked={blocked} onOpen={open} onOpenWeek={openWeek} />
+              <MonthGrid days={days} focus={focus} today={today} byDay={byDay} blocked={blocked} shades={shades} onOpen={open} onOpenWeek={openWeek} />
             ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-2">
               {days.map((day) => {
                 const dayJobs = byDay.get(day) ?? []
                 const isToday = day === today
                 return (
-                  <section key={day} className={`rounded-xl border p-2.5 min-h-[8rem] ${isToday ? 'border-cobalt-500/60 bg-cobalt-500/5' : 'border-white/10 bg-obsidian-900/40'}`}>
+                  <section key={day} className={`rounded-xl border p-2.5 min-h-[8rem] ${dayCellClass(shades.get(day), isToday)}`}>
                     <header className="flex items-baseline justify-between mb-2">
                       <span className={`text-xs font-semibold ${isToday ? 'text-cobalt-300' : 'text-slate-300'}`}>
                         {formatDateOnly(day, { weekday: 'short', month: 'short', day: 'numeric' })}
@@ -177,10 +193,11 @@ function JobCard({ job, day, onOpen }: { job: CalendarJob; day: DateOnly; onOpen
 const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const MAX_CHIPS = 3
 
-// Month view. md+ screens get a 7-column grid of clickable job chips ("+N
-// more" and the day number open that week). Narrow screens keep the grid
-// for orientation with a per-day job count, plus a day-by-day list of the
-// month's jobs using the full cards.
+// A day cell's workload shade; today keeps its cobalt outline on top.
+function dayCellClass(shade: DayShade | undefined, isToday: boolean): string {
+  return `${dayShadeClass('dark', shade)} ${isToday ? 'ring-1 ring-cobalt-400/70' : ''}`
+}
+
 function BlockedBadge() {
   return (
     <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-200 bg-red-500/15 border border-red-500/30 rounded px-1.5 py-0.5 mb-1.5">
@@ -189,12 +206,17 @@ function BlockedBadge() {
   )
 }
 
-function MonthGrid({ days, focus, today, byDay, blocked, onOpen, onOpenWeek }: {
+// Month view. md+ screens get a 7-column grid of clickable job chips ("+N
+// more" and the day number open that week). Narrow screens keep the grid
+// for orientation with a per-day job count, plus a day-by-day list of the
+// month's jobs using the full cards.
+function MonthGrid({ days, focus, today, byDay, blocked, shades, onOpen, onOpenWeek }: {
   days: DateOnly[]
   focus: DateOnly
   today: DateOnly
   byDay: Map<DateOnly, CalendarJob[]>
   blocked: Set<DateOnly>
+  shades: Map<DateOnly, DayShade>
   onOpen: (leadId: string) => void
   onOpenWeek: (day: DateOnly) => void
 }) {
@@ -214,7 +236,7 @@ function MonthGrid({ days, focus, today, byDay, blocked, onOpen, onOpenWeek }: {
             <section
               key={day}
               aria-label={isBlocked ? `${formatDateOnly(day, { weekday: 'long', month: 'long', day: 'numeric' })}, blocked` : undefined}
-              className={`min-w-0 rounded-lg md:rounded-xl border p-1 md:p-1.5 min-h-[3.25rem] md:min-h-[7rem] ${isToday ? 'border-cobalt-500/60 bg-cobalt-500/5' : isBlocked ? 'border-red-500/30 bg-red-500/[0.07]' : 'border-white/10 bg-obsidian-900/40'} ${isSameMonth(day, month) ? '' : 'opacity-50'}`}
+              className={`min-w-0 rounded-lg md:rounded-xl border p-1 md:p-1.5 min-h-[3.25rem] md:min-h-[7rem] ${dayCellClass(shades.get(day), isToday)} ${isSameMonth(day, month) ? '' : 'opacity-50'}`}
             >
               <header className="flex items-center justify-between">
                 <button
