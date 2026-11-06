@@ -539,7 +539,7 @@ export default function CustomerCustomizer({ shopIdOverride }: { shopIdOverride?
             </button>
 
             <h2 className="text-xl font-bold mb-1 text-white">Vehicle Gallery</h2>
-            <p className="text-sm text-slate-400 mb-6">Browse available vehicles and start customizing.</p>
+            <p className="text-sm text-slate-400 mb-6">Browse our most popular vehicles and start customizing.</p>
             {vehicles.length === 0 ? (
               <div className="text-center py-12 mb-6">
                 <Car size={40} className="mx-auto text-slate-700 mb-3" />
