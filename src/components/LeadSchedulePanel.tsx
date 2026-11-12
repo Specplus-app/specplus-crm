@@ -719,7 +719,12 @@ function DepositDialog({ deposit, onClose, onSubmit }: {
       </div>
       <div>
         <label className="block text-xs font-semibold text-zinc-600 mb-1">Amount <span className="font-normal text-zinc-400">(optional, USD)</span></label>
-        <input type="text" inputMode="decimal" value={draft.amount} onChange={set('amount')} placeholder="150.00" className={inputCls} />
+        <input type="text" inputMode="decimal" value={draft.amount} onChange={set('amount')} disabled={received} placeholder="150.00" className={`${inputCls} disabled:opacity-60`} />
+        {received && (
+          <p className="text-[11px] text-zinc-500 mt-1">
+            This amount was marked as received, so it's locked. To change it, close this, choose "Undo received", then edit the amount. You can still correct the link and instructions here.
+          </p>
+        )}
         {fieldError('amount')}
       </div>
       <div>

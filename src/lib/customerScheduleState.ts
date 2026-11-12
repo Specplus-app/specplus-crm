@@ -12,6 +12,8 @@ export type PublicSchedule = {
   can_request: boolean
   offer: { note: string | null; is_reschedule: boolean; options: { id: string; start_date: string; available?: boolean }[] } | null
   calendar?: PublicCalendar | null
+  // The shop isn't taking online bookings right now (no reason is given).
+  booking_unavailable?: boolean
   // source 'calendar' requests have no option_id. available = false when the
   // shop has since blocked the date (or it passed): choose another.
   request: { option_id: string | null; start_date: string; requested_at: string; source?: 'offer' | 'calendar'; available?: boolean } | null
@@ -33,6 +35,7 @@ export const PUBLIC_SCHEDULE_ERRORS: Record<string, string> = {
   use_offered_dates: 'The shop has offered specific dates. Please choose one of those.',
   already_scheduled: 'Your project is already scheduled. Send the shop a message below if you need to change the date.',
   not_available: 'Dates can no longer be chosen for this project. Please message the shop.',
+  booking_unavailable: "Online booking isn't available right now. Send the shop a message below to arrange your start date.",
   staff_preview: 'You are signed in as shop staff. Customers choose dates from their own link.',
   rate_limited: 'Too many changes in a short time. Please wait a few minutes and try again.',
   not_found: 'Quote not found.',
@@ -147,7 +150,7 @@ export function customerScheduleReducer(state: CustomerScheduleState, action: Cu
         : { start_date: action.start_date, estimated_ready_date: null }
       return {
         ...state, submitting: false, requestError: null, selectedDate: null,
-        data: { ...state.data, booking, calendar: null, request: null, can_request: false },
+        data: { ...state.data, booking, calendar: null, request: null, can_request: false, booking_unavailable: false },
       }
     }
     case 'submitRejected':
@@ -167,7 +170,7 @@ export function customerScheduleView(state: CustomerScheduleState, quoteApproved
     if (state.status === 'loading') return quoteApproved ? 'loading' : 'hidden'
     return quoteApproved ? 'empty' : 'hidden'
   }
-  if (state.data.offer || state.data.booking || state.data.calendar) return 'content'
+  if (state.data.offer || state.data.booking || state.data.calendar || state.data.booking_unavailable) return 'content'
   return quoteApproved ? 'empty' : 'hidden'
 }
 

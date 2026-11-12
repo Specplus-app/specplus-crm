@@ -202,3 +202,12 @@ test('a repeated booking keeps the loaded booking and its deposit details', () =
   assert.equal(customerScheduleView(returning, true), 'content')
   assert.equal(returning.data?.deposit?.status, 'awaiting')
 })
+
+test('a shop not taking online bookings shows a generic message instead of the calendar', () => {
+  const unavailable: PublicSchedule = { can_request: false, offer: null, calendar: null, booking_unavailable: true, request: null, booking: null }
+  const s = run([{ type: 'loadStart', id: 1 }, { type: 'loadSuccess', id: 1, data: unavailable }])
+  assert.equal(customerScheduleView(s, true), 'content', 'not the "no dates offered yet" message')
+  const message = requestErrorMessage('booking_unavailable')
+  assert.match(message, /Online booking isn't available right now/)
+  for (const word of ['trial', 'billing', 'subscription', 'read-only']) assert.ok(!message.toLowerCase().includes(word), word)
+})

@@ -177,6 +177,13 @@ export default function CustomerSchedule({ token, shopName, staffPreview, quoteA
       )}
       {deposit && <DepositCard deposit={deposit} shopName={shopName} />}
 
+      {!booking && !offer && !calendar && state.data!.booking_unavailable && (
+        <p className="flex items-start gap-2 text-sm text-slate-300 bg-white/5 border border-white/10 rounded-xl px-4 py-3 mt-3" role="status">
+          <MessageSquare size={16} className="flex-shrink-0 mt-0.5 text-slate-400" />
+          <span>Online booking isn't available right now. Send {shopName} a message below to arrange your start date.</span>
+        </p>
+      )}
+
       {offer && (
         <>
           <p className="text-sm text-slate-400 mt-3 mb-3">

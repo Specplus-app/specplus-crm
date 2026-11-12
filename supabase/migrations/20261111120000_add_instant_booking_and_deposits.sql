@@ -22,6 +22,10 @@ Customer flow (book_schedule_date, token-scoped):
   booking for the same start date returns it (already_booked) without new
   rows, history or notifications; any other date is refused. Concurrent
   double clicks serialize on the lead lock.
+  Read-only (billing) shops take no NEW bookings (schedule_shop_is_read_only,
+  the rule confirm_schedule applied through schedule_authorize): the
+  customer sees a generic "booking unavailable" message, and existing
+  bookings and retries of them are unaffected.
 
 Deposits (optional, shown after booking; never processed by SpecPlus):
   - shop_deposit_settings: "request a deposit after booking" (off by
@@ -35,7 +39,10 @@ Deposits (optional, shown after booking; never processed by SpecPlus):
       not_required (no row, or requested = false)
       awaiting     (requested, not received)
       received     (received_at set; received_by records who)
-    A payment-link click is never recorded or treated as payment.
+    A payment-link click is never recorded or treated as payment. While a
+    deposit is marked received its amount is locked (and the request can't
+    be turned off); staff undo the receipt first. Its link and instructions
+    can still be corrected.
   - The deposit snapshot runs in its own subtransaction: a configuration
     problem is logged and skipped and can never undo or block the booking.
   - Payment URLs must be https://, with a hostname, no credentials, and no
@@ -500,6 +507,12 @@ BEGIN
   IF EXISTS (SELECT 1 FROM public.schedule_offers o WHERE o.lead_id = v_lead.id AND o.status = 'active') THEN
     RETURN jsonb_build_object('ok', false, 'error', 'use_offered_dates');
   END IF;
+  -- Read-only (billing) shops take no new bookings, as confirm_schedule's
+  -- schedule_authorize refused before. The customer gets a generic message;
+  -- existing bookings and retries of them (above) are unaffected.
+  IF public.schedule_shop_is_read_only(v_lead.shop_id) THEN
+    RETURN jsonb_build_object('ok', false, 'error', 'booking_unavailable');
+  END IF;
 
   -- Held until commit, so the date can't be blocked before the booking lands.
   PERFORM public.schedule_lock_availability(v_lead.shop_id, false);
@@ -561,6 +574,7 @@ DECLARE
   v_earliest date;
   v_latest date;
   v_calendar jsonb;
+  v_unavailable boolean;
 BEGIN
   IF p_token IS NULL THEN
     RETURN NULL;
@@ -579,7 +593,13 @@ BEGIN
     WHERE o.lead_id = v_quote.lead_id AND o.status = 'active' AND o.quote_id = v_quote.id;
   END IF;
 
-  IF v_is_current AND v_offer.id IS NULL AND NOT v_booked
+  -- A read-only (billing) shop takes no new bookings: no calendar, just a
+  -- generic "booking unavailable" flag (no billing details).
+  v_unavailable := v_is_current AND v_offer.id IS NULL AND NOT v_booked
+    AND v_lead_status NOT IN ('in_progress', 'completed', 'lost', 'archived')
+    AND public.schedule_shop_is_read_only(v_quote.shop_id);
+
+  IF v_is_current AND v_offer.id IS NULL AND NOT v_booked AND NOT v_unavailable
      AND v_lead_status NOT IN ('in_progress', 'completed', 'lost', 'archived') THEN
     v_earliest := current_date + 1;
     v_latest := current_date + public.schedule_booking_window_days(v_quote.shop_id);
@@ -608,6 +628,7 @@ BEGIN
                   FROM public.schedule_offer_options o WHERE o.offer_id = v_offer.id)
     ) END,
     'calendar', v_calendar,
+    'booking_unavailable', coalesce(v_unavailable, false),
     'request', (SELECT jsonb_build_object('option_id', r.option_id, 'start_date', r.start_date, 'requested_at', r.requested_at,
                   'source', r.source,
                   'available', public.schedule_start_date_is_open(r.start_date) AND NOT public.schedule_date_is_blocked(r.shop_id, r.start_date))
@@ -733,6 +754,13 @@ BEGIN
   SELECT * INTO v_old FROM public.lead_deposits d WHERE d.lead_id = v_lead.id FOR UPDATE;
   IF v_old.received_at IS NOT NULL AND NOT coalesce(p_requested, false) THEN
     RAISE EXCEPTION 'The deposit is marked as received. Undo that before turning off the deposit request.' USING ERRCODE = 'check_violation';
+  END IF;
+  -- A received amount is what was confirmed as paid: it can't change
+  -- (including to or from "no amount") until staff undo the receipt.
+  -- The link and instructions can still be corrected.
+  IF v_old.received_at IS NOT NULL AND v_old.amount IS DISTINCT FROM v_clean.amount THEN
+    RAISE EXCEPTION 'The deposit is marked as received, so its amount can''t change. Undo "received" first, then edit the amount.'
+      USING ERRCODE = 'check_violation';
   END IF;
 
   IF coalesce(v_old.requested, false) IS DISTINCT FROM coalesce(p_requested, false) THEN v_changed := v_changed || 'requested'::text; END IF;

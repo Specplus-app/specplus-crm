@@ -343,10 +343,74 @@ test('staff set the ready estimate later as an edit, and the calendar spans star
     /cannot be rewritten/, 'ended bookings stay as they were')
 })
 
+// Shop C's trial expired, so it is read-only; this briefly makes it active.
+const setShopCActive = (active: boolean) =>
+  db.query(`UPDATE shops SET subscription_status = $2 WHERE id = $1`, [ids.shopC, active ? 'active' : 'trial'])
+
+test('read-only shops take no new bookings, without exposing why', async () => {
+  await resetShop('shopC')
+  const { leadId, token } = await approvedLead('shopC')
+  assert.equal((await one(db, `SELECT public.schedule_shop_is_read_only($1) AS r`, [ids.shopC])).r, true)
+  const before = await leadStatus(leadId)
+  const eventsBefore = await count(`lead_events WHERE lead_id = $1`, [leadId])
+  const notificationsBefore = await count(`notification_events WHERE lead_id = $1`, [leadId])
+
+  const pub = await publicSchedule(token)
+  assert.deepEqual([pub.calendar, pub.booking_unavailable, pub.can_request], [null, true, false], 'no calendar, a generic flag')
+  for (const word of ['trial', 'billing', 'subscription', 'read-only', 'read_only']) assert.ok(!JSON.stringify(pub).includes(word), word)
+
+  for (let i = 0; i < 2; i++) {
+    const r = await book(token, D(5))
+    assert.deepEqual([r.ok, r.error], [false, 'booking_unavailable'])
+  }
+  assert.equal(await activeReservation(leadId), undefined, 'no reservation')
+  assert.equal(await leadStatus(leadId), before, 'no move to Scheduled')
+  assert.equal(await count(`lead_events WHERE lead_id = $1`, [leadId]), eventsBefore, 'no booking or status-change event')
+  assert.ok(!(await events(leadId)).some((e: any) => e.event_type === 'schedule_booked'))
+  assert.equal(await count(`notification_events WHERE lead_id = $1`, [leadId]), notificationsBefore, 'no notification')
+  assert.ok(!(await notificationKinds(leadId)).includes('date_booked'))
+
+  // An eligible shop still books normally.
+  await resetShop('shopB')
+  const eligible = await approvedLead('shopB')
+  assert.equal((await publicSchedule(eligible.token)).booking_unavailable, false)
+  assert.equal((await book(eligible.token, D(5))).ok, true)
+  assert.equal(await leadStatus(eligible.leadId), 'scheduled')
+})
+
+test('a booking made while the shop was active survives it becoming read-only, and retries stay safe', async () => {
+  await resetShop('shopC')
+  const { leadId, token } = await approvedLead('shopC')
+  await setShopCActive(true)
+  try {
+    assert.equal((await book(token, D(6))).ok, true)
+  } finally {
+    await setShopCActive(false)
+  }
+  const snapshot = async () => ({
+    reservations: await count(`schedule_reservations WHERE lead_id = $1`, [leadId]),
+    events: await count(`lead_events WHERE lead_id = $1`, [leadId]),
+    notifications: await count(`notification_events WHERE lead_id = $1`, [leadId]),
+  })
+  const after = await snapshot()
+  const retry = await book(token, D(6))
+  assert.deepEqual([retry.ok, retry.already_booked], [true, true], 'a retry of the successful booking still succeeds')
+  assert.deepEqual(await snapshot(), after, 'and changes nothing')
+  assert.equal((await book(token, D(7))).error, 'already_scheduled')
+  const pub = await publicSchedule(token)
+  assert.deepEqual([pub.booking?.start_date, pub.booking_unavailable], [D(6), false], 'the existing booking is still shown')
+  assert.equal(await leadStatus(leadId), 'scheduled')
+})
+
 test('read-only shops cannot set ready dates or deposits; admins can', async () => {
   await resetShop('shopC')
   const { leadId, token } = await approvedLead('shopC')
-  assert.equal((await book(token, D(5))).ok, true, "a read-only shop's customer can still book")
+  await setShopCActive(true)
+  try {
+    assert.equal((await book(token, D(5))).ok, true)
+  } finally {
+    await setShopCActive(false)
+  }
   await assert.rejects(setReady(leadId, 'userC', D(7)), /read-only/)
   await assert.rejects(setLeadDeposit(leadId, true, null, null, 'Pay at pickup', 'userC'), /read-only/)
   await assert.rejects(setShopDeposit('shopC', false, null, null, null), /read-only/)
@@ -461,6 +525,46 @@ test('only shop staff confirm receipt, and history records who', async () => {
   const none = await approvedLead()
   await assert.rejects(setReceived(none.leadId, true), /No deposit is requested/)
   assert.equal((await setReceived(leadId, true, staff('admin'))).ok, true, 'admins can confirm too')
+})
+
+test('a received deposit amount cannot silently change; links and instructions can be corrected', async () => {
+  await resetShop()
+  // The reproduction: request $100, book, mark received, change to $900.
+  await setShopDeposit('shopA', true, 'https://pay.example.com/a', 100, 'Pay to hold your date.')
+  const { leadId, token } = await approvedLead()
+  await book(token, D(9))
+  await setReceived(leadId, true)
+  const row = await leadDeposit(leadId)
+
+  for (const amount of [900, 100.01, null]) {
+    await assert.rejects(setLeadDeposit(leadId, true, 'https://pay.example.com/a', amount, 'Pay to hold your date.'),
+      /marked as received, so its amount can't change/, String(amount))
+  }
+  const pub = await publicSchedule(token)
+  assert.deepEqual([pub.deposit.status, pub.deposit.amount], ['received', 100], 'still the amount that was received')
+  const unchanged = await leadDeposit(leadId)
+  assert.deepEqual([Number(unchanged.amount), unchanged.received_at?.toString(), unchanged.received_by],
+    [100, row.received_at?.toString(), row.received_by])
+  assert.equal(await count(`lead_events WHERE lead_id = $1 AND event_type = 'deposit_updated'`, [leadId]), 0, 'refusals record nothing')
+
+  // The same amount with a corrected link and instructions is fine.
+  assert.equal((await setLeadDeposit(leadId, true, 'https://pay.example.com/corrected', 100, 'Thanks — received.')).ok, true)
+  const corrected = await publicSchedule(token)
+  assert.deepEqual([corrected.deposit.status, corrected.deposit.amount, corrected.deposit.payment_url, corrected.deposit.instructions],
+    ['received', 100, 'https://pay.example.com/corrected', 'Thanks — received.'])
+
+  // Undo the receipt explicitly, then the amount can change.
+  await setReceived(leadId, false)
+  assert.equal((await setLeadDeposit(leadId, true, 'https://pay.example.com/corrected', 900, null)).ok, true)
+  assert.deepEqual([(await publicSchedule(token)).deposit.status, (await publicSchedule(token)).deposit.amount], ['awaiting', 900])
+
+  // A deposit received with no amount can't gain one either.
+  const noAmount = await approvedLead()
+  await setLeadDeposit(noAmount.leadId, true, null, null, 'Pay at drop-off.')
+  await book(noAmount.token, D(10))
+  await setReceived(noAmount.leadId, true)
+  await assert.rejects(setLeadDeposit(noAmount.leadId, true, null, 50, 'Pay at drop-off.'), /amount can't change/)
+  assert.equal((await publicSchedule(noAmount.token)).deposit.amount, null)
 })
 
 test('deposit configuration problems never block or undo a booking', async () => {
