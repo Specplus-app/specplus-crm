@@ -143,9 +143,9 @@ export default function SchedulePage() {
 
             <section className="mt-6">
               <h2 className="text-sm font-semibold text-amber-200 flex items-center gap-2 mb-2">
-                <CalendarClock size={15} /> Awaiting shop confirmation ({pending.length})
+                <CalendarClock size={15} /> Date requests to confirm ({pending.length})
               </h2>
-              <p className="text-xs text-slate-500 mb-2">Dates customers requested within the dates shown. Not booked until confirmed on the lead.</p>
+              <p className="text-xs text-slate-500 mb-2">Customers now book directly and their bookings appear on the calendar right away. These are earlier date requests and offered-date choices within the dates shown; they're booked once you confirm them on the lead.</p>
               {pending.length === 0 ? (
                 <p className="text-xs text-slate-600">No pending date requests for these dates.</p>
               ) : (

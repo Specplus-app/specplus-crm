@@ -1,4 +1,4 @@
-import { supabase, Lead, LeadEvent, LeadStatus, LEAD_STATUSES, PartEntry, Quote, QuoteLineItem, QuoteStatus } from './supabase'
+import { supabase, formatCurrency, Lead, LeadEvent, LeadStatus, LEAD_STATUSES, PartEntry, Quote, QuoteLineItem, QuoteStatus } from './supabase'
 import { ensureDraftQuote, initialQuoteValues, type EnsureDraftResult } from './quoteRules'
 import { formatDateOnly, isDateOnly } from './scheduleDates'
 
@@ -216,6 +216,9 @@ export function normalizeQuote(row: Quote): Quote {
 // ---------------------------------------------------------------------------
 
 const eventDate = (value: unknown): string => (isDateOnly(value) ? formatDateOnly(value, { month: 'short', day: 'numeric', year: 'numeric' }) : '—')
+// A booking's span; customer bookings may not have a ready date yet.
+const eventRange = (start: unknown, ready: unknown): string =>
+  isDateOnly(ready) ? `${eventDate(start)}–${eventDate(ready)}` : `${eventDate(start)} (ready date not set)`
 
 function statusLabel(value: unknown): string {
   if (typeof value !== 'string') return 'Unknown'
@@ -260,10 +263,24 @@ export function describeLeadEvent(event: LeadEvent): string {
       return `Customer requested a production start of ${eventDate(m.start_date)}${m.changed_choice ? ' (changed choice)' : ''}`
     case 'schedule_confirmed':
       return m.rescheduled
-        ? `Schedule moved from ${eventDate(m.previous_start_date)}–${eventDate(m.previous_estimated_ready_date)} to ${eventDate(m.start_date)}–${eventDate(m.estimated_ready_date)}`
+        ? `Schedule moved from ${eventRange(m.previous_start_date, m.previous_estimated_ready_date)} to ${eventDate(m.start_date)}–${eventDate(m.estimated_ready_date)}`
         : `Schedule confirmed: start ${eventDate(m.start_date)}, ready ${eventDate(m.estimated_ready_date)}`
     case 'schedule_cancelled':
-      return `Schedule cancelled (was ${eventDate(m.start_date)}–${eventDate(m.estimated_ready_date)})`
+      return `Schedule cancelled (was ${eventRange(m.start_date, m.estimated_ready_date)})`
+    case 'schedule_booked':
+      return `Customer booked a production start of ${eventDate(m.start_date)}${m.replaced_request ? ' (replacing their date request)' : ''}`
+    case 'schedule_ready_date_set':
+      return isDateOnly(m.previous_estimated_ready_date)
+        ? `Estimated ready date changed from ${eventDate(m.previous_estimated_ready_date)} to ${eventDate(m.estimated_ready_date)}`
+        : `Estimated ready date set to ${eventDate(m.estimated_ready_date)}`
+    case 'deposit_updated':
+      return m.requested === false
+        ? 'Deposit request turned off'
+        : `Deposit details updated${typeof m.amount === 'number' ? ` (${formatCurrency(m.amount)})` : ''}`
+    case 'deposit_received':
+      return `Deposit marked as received${typeof m.amount === 'number' ? ` (${formatCurrency(m.amount)})` : ''}`
+    case 'deposit_receipt_undone':
+      return 'Deposit receipt undone; awaiting deposit again'
     case 'schedule_options_invalidated':
       return `${rev} replaced outstanding date options; fresh dates are needed after approval`
     default: {

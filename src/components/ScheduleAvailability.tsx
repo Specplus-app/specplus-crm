@@ -76,8 +76,8 @@ export default function ScheduleAvailability({ shopId, readOnly, availability, l
             <CalendarRange size={15} className="text-cobalt-400" /> Customer booking
           </h2>
           <p className="text-xs text-slate-400 mt-1 max-w-2xl">
-            After approving a quote, customers can request a start date from tomorrow through the booking window below, on any day you haven't blocked.
-            Requests aren't booked until you confirm them on the lead. Existing jobs don't block days, so block dates when you're full.
+            After approving a quote, customers can book a start date from tomorrow through the booking window below, on any day you haven't blocked.
+            Bookings are confirmed right away and appear on your calendar. Existing jobs don't block days, so block dates when you're full.
           </p>
         </div>
         <button type="button" onClick={() => onChanged()} disabled={loading} className="p-1.5 rounded-lg border border-white/10 text-slate-300 hover:bg-white/10 disabled:opacity-50" aria-label="Refresh availability" title="Refresh availability">

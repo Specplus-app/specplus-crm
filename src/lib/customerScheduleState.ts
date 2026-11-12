@@ -1,8 +1,9 @@
 // State for the customer's production-date section on the quote page. Pure
 // (no runtime imports) so loading, refresh and request edge cases are unit
 // tested. The database functions remain authoritative.
+import type { PublicDeposit } from './deposits'
 
-// The booking window the customer may pick from (no offered dates): from
+// The booking window the customer may book from (no offered dates): from
 // `earliest` through `latest`, except the shop's blocked dates.
 export type PublicCalendar = { earliest: string; latest: string; blocked_dates: string[] }
 
@@ -14,7 +15,10 @@ export type PublicSchedule = {
   // source 'calendar' requests have no option_id. available = false when the
   // shop has since blocked the date (or it passed): choose another.
   request: { option_id: string | null; start_date: string; requested_at: string; source?: 'offer' | 'calendar'; available?: boolean } | null
-  booking: { start_date: string; estimated_ready_date: string } | null
+  // estimated_ready_date is null until the shop provides an estimate.
+  booking: { start_date: string; estimated_ready_date: string | null } | null
+  // The shop's deposit request for an active booking, if any.
+  deposit?: PublicDeposit | null
 }
 
 export const PUBLIC_SCHEDULE_ERRORS: Record<string, string> = {
@@ -33,6 +37,8 @@ export const PUBLIC_SCHEDULE_ERRORS: Record<string, string> = {
   rate_limited: 'Too many changes in a short time. Please wait a few minutes and try again.',
   not_found: 'Quote not found.',
 }
+
+export const BOOK_FAILED = "Your date couldn't be booked. Please try again."
 
 export type CalendarDateStatus = 'available' | 'blocked' | 'outside'
 
@@ -71,6 +77,9 @@ export type CustomerScheduleAction =
   // The server recorded the request; reflect it even if the refresh fails.
   // A calendar request has no option id.
   | { type: 'submitAccepted'; option: { id: string | null; start_date: string }; at: string }
+  // The server booked the date ("Book It"); show the confirmed booking even
+  // if the refresh fails. Deposit details arrive with the next load.
+  | { type: 'bookAccepted'; start_date: string }
   | { type: 'submitRejected'; message: string }
   | { type: 'submitSettled' }
 
@@ -128,6 +137,17 @@ export function customerScheduleReducer(state: CustomerScheduleState, action: Cu
       return {
         ...state, submitting: false, requestError: null, data: { ...state.data, request },
         ...(calendar ? { selectedDate: action.option.start_date } : { selected: action.option.id }),
+      }
+    }
+    case 'bookAccepted': {
+      if (!state.data) return { ...state, submitting: false }
+      // Keep an already loaded booking (e.g. its ready date) on a repeated click.
+      const booking = state.data.booking?.start_date === action.start_date
+        ? state.data.booking
+        : { start_date: action.start_date, estimated_ready_date: null }
+      return {
+        ...state, submitting: false, requestError: null, selectedDate: null,
+        data: { ...state.data, booking, calendar: null, request: null, can_request: false },
       }
     }
     case 'submitRejected':

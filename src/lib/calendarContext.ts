@@ -8,12 +8,14 @@ import type { DateOnly } from './scheduleDates'
 
 export type CalendarLead = { id: string; customer_name: string; vehicle_name: string; fulfillment_mode: 'local' | 'mail'; status: string }
 
-// Confirmed booking (schedule_reservations, active).
+// Confirmed booking (schedule_reservations, active). A customer booking has
+// no estimated-ready date (null) until staff set one; it then covers only its
+// start date.
 export type CalendarJob = {
   id: string
   lead_id: string
   start_date: DateOnly
-  estimated_ready_date: DateOnly
+  estimated_ready_date: DateOnly | null
   lead: CalendarLead | null
 }
 
@@ -27,7 +29,7 @@ export const MAX_OFFER_DATES = 10
 export type JobPosition = 'Starts' | 'Ready' | 'In shop'
 
 // Where a confirmed job is on a given day of its start-to-ready range.
-export function jobPosition(job: { start_date: DateOnly; estimated_ready_date: DateOnly }, day: DateOnly): JobPosition {
+export function jobPosition(job: { start_date: DateOnly; estimated_ready_date: DateOnly | null }, day: DateOnly): JobPosition {
   return job.start_date === day ? 'Starts' : job.estimated_ready_date === day ? 'Ready' : 'In shop'
 }
 
@@ -42,7 +44,7 @@ export type DayDetails<J, R> = { jobs: (J & { position: JobPosition })[]; reques
 
 // Everything on one day: confirmed jobs whose range covers it (starts first,
 // then by start date) and requests for that start date.
-export function dayDetails<J extends { start_date: DateOnly; estimated_ready_date: DateOnly }, R extends { start_date: DateOnly }>(
+export function dayDetails<J extends { start_date: DateOnly; estimated_ready_date: DateOnly | null }, R extends { start_date: DateOnly }>(
   day: DateOnly,
   jobs: J[],
   requests: R[],
@@ -50,7 +52,7 @@ export function dayDetails<J extends { start_date: DateOnly; estimated_ready_dat
   const order: Record<JobPosition, number> = { Starts: 0, 'In shop': 1, Ready: 2 }
   return {
     jobs: jobs
-      .filter((j) => j.start_date <= day && day <= j.estimated_ready_date)
+      .filter((j) => j.start_date <= day && day <= (j.estimated_ready_date ?? j.start_date))
       .map((j) => ({ ...j, position: jobPosition(j, day) }))
       .sort((a, b) => order[a.position] - order[b.position] || a.start_date.localeCompare(b.start_date)),
     requests: requests.filter((r) => r.start_date === day),
@@ -81,7 +83,8 @@ export async function loadShopCalendar(client: SupabaseClient, shopId: string, r
         .eq('shop_id', shopId)
         .eq('status', 'active')
         .lte('start_date', rangeEnd)
-        .gte('estimated_ready_date', rangeStart)
+        // Ends in or after the range; an unestimated booking ends on its start.
+        .or(`estimated_ready_date.gte.${rangeStart},and(estimated_ready_date.is.null,start_date.gte.${rangeStart})`)
         .order('start_date', { ascending: true }),
       client.from('schedule_requests')
         .select(`id, lead_id, start_date, requested_at, lead:leads(${CALENDAR_LEAD_FIELDS})`)

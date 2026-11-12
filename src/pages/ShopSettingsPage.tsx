@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, Building2, Check, Copy, ExternalLink, Image as ImageIcon, Link2, Mail, Pencil, Phone, Settings, Trash2, Upload } from 'lucide-react'
+import { AlertCircle, Building2, Check, Copy, ExternalLink, Image as ImageIcon, Link2, Mail, Pencil, Phone, Settings, Trash2, Upload, Wallet } from 'lucide-react'
 import { useAuth } from '../lib/auth'
 import { useShopBilling } from '../lib/billing'
-import { supabase } from '../lib/supabase'
+import { formatCurrency, supabase } from '../lib/supabase'
+import { loadShopDepositSettings, saveShopDepositSettings } from '../lib/schedule'
+import {
+  DEPOSIT_INSTRUCTIONS_MAX, draftFromDeposit, isSafePaymentUrl, validateDepositDraft, type DepositDraft, type ShopDepositSettings,
+} from '../lib/deposits'
 import { LoadingScreen } from '../components/LoadingScreen'
 import { copyText, customerLinkFor, publicQuoteOrigin } from '../lib/customerLink'
 import { removeShopLogo, uploadShopLogo, type LogoResult } from '../lib/shopLogo'
@@ -98,6 +102,7 @@ export default function ShopSettingsPage() {
               onSaved={(shop) => setState({ status: 'ready', shop })}
             />
             <QuoteRequestsCard link={customerLinkFor(PUBLIC_QUOTE_ORIGIN, state.shop)} />
+            <DepositSettingsCard shopId={state.shop.id} />
           </>
         )}
       </div>
@@ -386,6 +391,168 @@ function QuoteRequestsCard({ link }: { link: string }) {
         {copy === 'copied' && <span className="text-emerald-300">Link copied to your clipboard.</span>}
         {copy === 'failed' && <span className="text-amber-200">Couldn't copy automatically. The link is selected — copy it from the box.</span>}
       </p>
+    </section>
+  )
+}
+
+// Optional deposit requested after a customer books. These are defaults:
+// each booking keeps a copy of what was set when it was booked, and staff can
+// override it on the lead. SpecPlus never processes the payment.
+function DepositSettingsCard({ shopId }: { shopId: string }) {
+  const { readOnly } = useShopBilling()
+  const [settings, setSettings] = useState<ShopDepositSettings | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [enabled, setEnabled] = useState(false)
+  const [draft, setDraft] = useState<DepositDraft>(() => draftFromDeposit(null))
+  const [touched, setTouched] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoadError(null)
+    try {
+      const { data, error } = await loadShopDepositSettings(shopId)
+      if (error || !data) setLoadError(error ?? 'Could not load deposit settings.')
+      else setSettings(data)
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Network error')
+    }
+  }, [shopId])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const checked = validateDepositDraft(draft, enabled)
+  const valid = Object.keys(checked.errors).length === 0
+
+  const startEdit = () => {
+    setEnabled(settings?.enabled ?? false)
+    setDraft(draftFromDeposit(settings))
+    setTouched(false)
+    setSaveError(null)
+    setSaved(false)
+    setEditing(true)
+  }
+  const save = async () => {
+    setTouched(true)
+    if (!valid || saving) return
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const next = { enabled, ...checked.values }
+      const { error } = await saveShopDepositSettings(shopId, next)
+      if (error) throw new Error(error)
+      setSettings(next)
+      setEditing(false)
+      setSaved(true)
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Could not save your deposit settings. Please try again.')
+    } finally {
+      setSaving(false)
+    }
+  }
+  const fieldError = (key: keyof DepositDraft) =>
+    touched && checked.errors[key] ? <p className="text-xs text-red-300 mt-1">{checked.errors[key]}</p> : null
+  const field = (key: keyof DepositDraft) => ({
+    value: draft[key],
+    disabled: saving,
+    onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setDraft((d) => ({ ...d, [key]: e.target.value })),
+    onBlur: () => setTouched(true),
+    'aria-invalid': touched && checked.errors[key] ? true : undefined,
+    className: `${inputClass} ${touched && checked.errors[key] ? 'border-red-500/50' : 'border-white/10'}`,
+  })
+
+  return (
+    <section className={card}>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-slate-100 flex items-center gap-2">
+          <Wallet size={16} className="text-cobalt-400" /> Deposits
+        </h2>
+        {!editing && settings && !readOnly && (
+          <button onClick={startEdit} className="flex items-center gap-1.5 text-sm font-medium text-slate-200 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg px-3 py-1.5 transition-colors">
+            <Pencil size={14} /> Edit
+          </button>
+        )}
+      </div>
+      <p className="text-xs text-slate-400 mt-1">
+        Optionally ask customers for a deposit after they book. They see your amount, instructions and a Pay Deposit button that opens your own payment page.
+        SpecPlus doesn't process payments; mark deposits as received on each lead. Changes here apply to new bookings only.
+      </p>
+
+      {loadError && (
+        <div className="flex items-start justify-between gap-3 text-xs text-red-200 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2 mt-3" role="alert">
+          <span className="flex items-start gap-2"><AlertCircle size={14} className="mt-0.5 flex-shrink-0" /> Could not load deposit settings: {loadError}</span>
+          <button onClick={load} className="font-medium underline flex-shrink-0">Retry</button>
+        </div>
+      )}
+      {!settings && !loadError && <div className="h-16 bg-white/5 rounded-xl animate-pulse mt-3" aria-busy="true" />}
+
+      {settings && editing && (
+        <form className="grid gap-3 text-sm mt-4" noValidate onSubmit={(e) => { e.preventDefault(); save() }}>
+          <label className="flex items-start gap-2 text-slate-200">
+            <input type="checkbox" checked={enabled} disabled={saving} onChange={(e) => setEnabled(e.target.checked)} className="mt-0.5" />
+            <span>Request a deposit after booking</span>
+          </label>
+          <label className="block">
+            <span className="text-xs text-slate-500">Payment link <span className="text-slate-600">(https only)</span></span>
+            <input {...field('payment_url')} type="url" inputMode="url" autoCapitalize="none" spellCheck={false} placeholder="https://" />
+            {fieldError('payment_url')}
+          </label>
+          <label className="block">
+            <span className="text-xs text-slate-500">Deposit amount <span className="text-slate-600">(optional, USD)</span></span>
+            <input {...field('amount')} type="text" inputMode="decimal" placeholder="150.00" />
+            {fieldError('amount')}
+          </label>
+          <label className="block">
+            <span className="text-xs text-slate-500">Payment instructions <span className="text-slate-600">(shown to customers)</span></span>
+            <textarea {...field('instructions')} rows={3} maxLength={DEPOSIT_INSTRUCTIONS_MAX} className={`${field('instructions').className} resize-none`} />
+            {fieldError('instructions')}
+          </label>
+          {saveError && (
+            <p className="flex items-start gap-2 text-xs text-red-200 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2" role="alert">
+              <AlertCircle size={14} className="mt-0.5 flex-shrink-0" /> {saveError}
+            </p>
+          )}
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-1">
+            <button type="button" onClick={() => setEditing(false)} disabled={saving} className="flex items-center justify-center text-sm font-medium text-slate-300 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg px-4 py-2.5 transition-colors disabled:opacity-50">
+              Cancel
+            </button>
+            <button type="submit" disabled={saving || (touched && !valid)} className="flex items-center justify-center gap-2 text-sm font-semibold text-white bg-cobalt-600 hover:bg-cobalt-500 rounded-lg px-4 py-2.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+              {saving ? 'Saving…' : 'Save deposit settings'}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {settings && !editing && (
+        <dl className="grid gap-3 text-sm mt-4">
+          <div>
+            <dt className="text-xs text-slate-500">Request a deposit after booking</dt>
+            <dd className="text-slate-100 font-medium">{settings.enabled ? 'On' : 'Off'}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-slate-500">Payment link</dt>
+            <dd className="text-slate-200 break-all">
+              {settings.payment_url && isSafePaymentUrl(settings.payment_url)
+                ? <a href={settings.payment_url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" className="underline">{settings.payment_url}</a>
+                : <span className="text-slate-500">Not provided</span>}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-slate-500">Deposit amount</dt>
+            <dd className="text-slate-200">{settings.amount != null ? formatCurrency(settings.amount) : <span className="text-slate-500">Not set</span>}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-slate-500">Payment instructions</dt>
+            <dd className="text-slate-200 whitespace-pre-wrap">{settings.instructions || <span className="text-slate-500">Not provided</span>}</dd>
+          </div>
+          {saved && <p className="text-xs text-emerald-300" aria-live="polite">Deposit settings saved. They apply to new bookings.</p>}
+          {readOnly && <p className="text-xs text-slate-500">Your trial has expired. Upgrade to change deposit settings.</p>}
+        </dl>
+      )}
     </section>
   )
 }

@@ -6,7 +6,7 @@ import {
 import { syncThisDevice, type DeviceStatus, type SyncResult } from './pushSync'
 
 export type NotificationKind =
-  | 'new_request' | 'customer_message' | 'quote_approved' | 'quote_declined' | 'date_requested' | 'status_changed'
+  | 'new_request' | 'customer_message' | 'quote_approved' | 'quote_declined' | 'date_requested' | 'date_booked' | 'status_changed'
 
 export type InboxNotification = {
   id: string
@@ -38,6 +38,7 @@ export function notificationTitle(n: Pick<InboxNotification, 'kind' | 'metadata'
     case 'quote_approved': return 'Quote approved'
     case 'quote_declined': return 'Quote declined'
     case 'date_requested': return 'Production date selected'
+    case 'date_booked': return 'Production date booked'
     case 'status_changed':
       return n.metadata?.to ? `Moved to ${getWorkflowMeta(workflowStatusFor(n.metadata.to)).label}` : 'Lead updated'
     default: return 'Lead update'

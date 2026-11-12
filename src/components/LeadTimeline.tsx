@@ -3,7 +3,7 @@ import { supabase, LeadEvent, formatDateTime } from '../lib/supabase'
 import { describeLeadEvent } from '../lib/quotes'
 import {
   Activity, CalendarCheck, CalendarClock, CalendarDays, CalendarX, CheckCircle2, Eye, FilePlus2, Inbox, MessageSquare,
-  RefreshCw, Send, Shuffle, XCircle, type LucideIcon,
+  RefreshCw, Send, Shuffle, Wallet, XCircle, type LucideIcon,
 } from 'lucide-react'
 
 const EVENT_ICONS: Record<string, { icon: LucideIcon; color: string }> = {
@@ -21,6 +21,11 @@ const EVENT_ICONS: Record<string, { icon: LucideIcon; color: string }> = {
   schedule_confirmed: { icon: CalendarCheck, color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
   schedule_cancelled: { icon: CalendarX, color: 'text-red-600 bg-red-50 border-red-200' },
   schedule_options_invalidated: { icon: CalendarX, color: 'text-zinc-600 bg-zinc-50 border-zinc-200' },
+  schedule_booked: { icon: CalendarCheck, color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
+  schedule_ready_date_set: { icon: CalendarDays, color: 'text-cyan-600 bg-cyan-50 border-cyan-200' },
+  deposit_updated: { icon: Wallet, color: 'text-zinc-600 bg-zinc-50 border-zinc-200' },
+  deposit_received: { icon: Wallet, color: 'text-emerald-600 bg-emerald-50 border-emerald-200' },
+  deposit_receipt_undone: { icon: Wallet, color: 'text-amber-600 bg-amber-50 border-amber-200' },
 }
 
 const DEFAULT_ICON = { icon: Activity, color: 'text-zinc-600 bg-zinc-50 border-zinc-200' }

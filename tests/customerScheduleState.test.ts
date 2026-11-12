@@ -167,3 +167,38 @@ test('calendar error codes have customer-facing messages', () => {
   }
   assert.match(requestErrorMessage('outside_window'), /message below/)
 })
+
+// ---------------------------------------------------------------------------
+// Instant booking ("Book It")
+// ---------------------------------------------------------------------------
+
+test('a booked date is shown as confirmed at once, even if the refresh fails', () => {
+  const s = run([
+    { type: 'loadStart', id: 1 },
+    { type: 'loadSuccess', id: 1, data: bookable },
+    { type: 'selectDate', date: '2026-11-10' },
+    { type: 'submitStart' },
+    { type: 'bookAccepted', start_date: '2026-11-10' },
+    { type: 'submitSettled' },
+    { type: 'loadStart', id: 2 },
+    { type: 'loadFailure', id: 2 },
+  ])
+  assert.deepEqual(s.data?.booking, { start_date: '2026-11-10', estimated_ready_date: null }, 'no invented ready date')
+  assert.deepEqual([s.data?.calendar, s.data?.request, s.submitting, s.selectedDate], [null, null, false, null])
+  assert.equal(customerScheduleView(s, true), 'content')
+})
+
+test('a repeated booking keeps the loaded booking and its deposit details', () => {
+  const booked: PublicSchedule = {
+    can_request: false, offer: null, calendar: null, request: null,
+    booking: { start_date: '2026-11-10', estimated_ready_date: '2026-11-14' },
+    deposit: { status: 'awaiting', amount: 150, payment_url: 'https://pay.example.com/x', instructions: null },
+  }
+  const s = run([{ type: 'loadStart', id: 1 }, { type: 'loadSuccess', id: 1, data: booked }, { type: 'bookAccepted', start_date: '2026-11-10' }])
+  assert.deepEqual(s.data?.booking, booked.booking)
+  assert.deepEqual(s.data?.deposit, booked.deposit)
+  // After returning to the link, the booking and deposit load again.
+  const returning = run([{ type: 'loadStart', id: 1 }, { type: 'loadSuccess', id: 1, data: booked }])
+  assert.equal(customerScheduleView(returning, true), 'content')
+  assert.equal(returning.data?.deposit?.status, 'awaiting')
+})

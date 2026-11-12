@@ -182,7 +182,7 @@ export default function ScheduleContextCalendar({ shopId, leadId, mode, initialF
               )}
               {details.requests.length > 0 && (
                 <div>
-                  <p className="text-[11px] font-semibold text-amber-700 uppercase tracking-wide mb-1">Pending requests — not booked ({details.requests.length})</p>
+                  <p className="text-[11px] font-semibold text-amber-700 uppercase tracking-wide mb-1">Date requests to confirm — not booked ({details.requests.length})</p>
                   <ul className="space-y-1">
                     {details.requests.map((r) => (
                       <li key={r.id} className="rounded-lg border border-dashed border-amber-400 bg-amber-50/60 px-2.5 py-1.5">

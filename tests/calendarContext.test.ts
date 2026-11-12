@@ -63,7 +63,7 @@ function fakeClient(results: { reservations?: unknown; requests?: unknown; throw
       const call = { table, ops: [] as unknown[][] }
       calls.push(call)
       const builder: Record<string, unknown> = {}
-      for (const op of ['select', 'eq', 'lte', 'gte', 'order']) builder[op] = (...args: unknown[]) => { call.ops.push([op, ...args]); return builder }
+      for (const op of ['select', 'eq', 'lte', 'gte', 'or', 'order']) builder[op] = (...args: unknown[]) => { call.ops.push([op, ...args]); return builder }
       builder.then = (resolve: (v: unknown) => void) => resolve(table === 'schedule_reservations' ? results.reservations : results.requests)
       return builder
     },
@@ -79,7 +79,9 @@ test('the shared loader reads one shop: active bookings overlapping the range an
   assert.deepEqual(res, { data: { jobs, pending }, error: null })
   const ops = (t: string) => calls.find((c) => c.table === t)!.ops.filter(([op]) => op !== 'select' && op !== 'order')
   assert.deepEqual(ops('schedule_reservations'), [
-    ['eq', 'shop_id', 'shop-a'], ['eq', 'status', 'active'], ['lte', 'start_date', '2026-12-07'], ['gte', 'estimated_ready_date', '2026-10-27'],
+    ['eq', 'shop_id', 'shop-a'], ['eq', 'status', 'active'], ['lte', 'start_date', '2026-12-07'],
+    // Bookings without a ready date yet end on their start date.
+    ['or', 'estimated_ready_date.gte.2026-10-27,and(estimated_ready_date.is.null,start_date.gte.2026-10-27)'],
   ])
   assert.deepEqual(ops('schedule_requests'), [
     ['eq', 'shop_id', 'shop-a'], ['eq', 'status', 'pending'], ['gte', 'start_date', '2026-10-27'], ['lte', 'start_date', '2026-12-07'],
@@ -175,4 +177,14 @@ test('day shading counts confirmed jobs across their whole range and ignores pen
     ['2026-11-05', 'open'],
     ['2026-11-06', 'blocked'],
   ])
+})
+
+test('a booking without a ready estimate covers only its start date and counts as a job there', () => {
+  const days = ['2026-11-09', '2026-11-10', '2026-11-11']
+  const jobs = [{ id: 'b', lead_id: 'l', start_date: '2026-11-10', estimated_ready_date: null, lead: null }]
+  const byDay = jobsByDay(jobs, days)
+  assert.deepEqual(days.map((d) => byDay.get(d)!.length), [0, 1, 0], 'no invented span')
+  assert.deepEqual(dayDetails('2026-11-10', jobs, []).jobs.map((j) => j.position), ['Starts'])
+  assert.deepEqual(dayDetails('2026-11-11', jobs, []).jobs, [])
+  assert.deepEqual([...dayShades(days, byDay, new Set(), '2026-11-01').values()], ['open', 'busy', 'open'])
 })

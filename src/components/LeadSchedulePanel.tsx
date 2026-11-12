@@ -2,16 +2,28 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Lead, formatCurrency, formatDateTime } from '../lib/supabase'
 import {
   LeadScheduleState, cancelSchedule, confirmSchedule, createScheduleOffer, loadLeadSchedule, scheduleActions,
-  sendScheduleOptions, suggestedReadyDate, validateOfferDates,
+  sendScheduleOptions, setDepositReceived, setLeadDeposit, setScheduleReadyDate, suggestedReadyDate, validateOfferDates,
+  type DepositValues,
 } from '../lib/schedule'
+import {
+  DEPOSIT_INSTRUCTIONS_MAX, DEPOSIT_STATUS_LABELS, depositStatus, draftFromDeposit, isSafePaymentUrl, validateDepositDraft,
+  type DepositDraft, type LeadDeposit,
+} from '../lib/deposits'
 import { addDays, formatDateOnly, todayDateOnly } from '../lib/scheduleDates'
 import { toggleOfferDate } from '../lib/calendarContext'
 import ScheduleContextCalendar from './ScheduleContextCalendar'
-import { AlertCircle, AlertTriangle, CalendarCheck, CalendarClock, CalendarDays, CalendarX, Loader2, RefreshCw, Send, X } from 'lucide-react'
+import {
+  AlertCircle, AlertTriangle, CalendarCheck, CalendarClock, CalendarDays, CalendarX, CheckCircle2, ExternalLink, Loader2, Pencil,
+  RefreshCw, Send, Undo2, Wallet, X,
+} from 'lucide-react'
 
 const longDate = (d: string) => formatDateOnly(d, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
+// Customer bookings have no ready date until staff set one.
+const readyText = (d: string | null) => (d ? longDate(d) : 'not yet provided')
+const bookingText = (r: { start_date: string; estimated_ready_date: string | null }) =>
+  r.estimated_ready_date ? `${longDate(r.start_date)} – ${longDate(r.estimated_ready_date)}` : `${longDate(r.start_date)} (ready date not set)`
 
-type Dialog = 'offer' | 'confirm' | 'cancel' | null
+type Dialog = 'offer' | 'confirm' | 'cancel' | 'ready' | 'deposit' | null
 
 // Production scheduling for one lead: current offers, the customer's pending
 // request, the confirmed booking and its history, plus the staff actions.
@@ -68,7 +80,7 @@ export default function LeadSchedulePanel({
     } else if (state.activeOffer && !state.reservation) {
       setNotice('Date options were sent. The job moves to Scheduled after the customer picks a date and you confirm it.')
     } else if (actions.canOffer) {
-      setNotice('Scheduled needs a confirmed production date. The customer can request one from their quote link, or you can offer dates.')
+      setNotice('Scheduled needs a booked production date. The customer can book one from their quote link, or you can offer dates.')
       setDialog('offer')
     } else {
       setNotice(`Scheduled needs a confirmed production date. ${actions.offerBlockedReason ?? ''}`.trim())
@@ -129,16 +141,29 @@ export default function LeadSchedulePanel({
       <div className="space-y-3">
         {a.scheduleMissing && (
           <p className="text-sm text-zinc-600">
-            This job is marked Scheduled but has no confirmed production date. The customer can request one from their quote link, or you can offer dates.
+            This job is marked Scheduled but has no booked production date. The customer can book one from their quote link, or you can offer dates.
           </p>
         )}
 
         {reservation && (
-          <Section icon={CalendarCheck} tone="emerald" title="Confirmed">
+          <Section icon={CalendarCheck} tone="emerald" title={reservation.source === 'customer' ? 'Booked by the customer' : 'Confirmed'}>
             <p className="text-sm text-zinc-800">
-              Start <strong>{longDate(reservation.start_date)}</strong> · Ready <strong>{longDate(reservation.estimated_ready_date)}</strong>
+              Start <strong>{longDate(reservation.start_date)}</strong> · Ready{' '}
+              {reservation.estimated_ready_date
+                ? <strong>{longDate(reservation.estimated_ready_date)}</strong>
+                : <span className="text-amber-700 font-medium">not yet provided</span>}
             </p>
-            <p className="text-xs text-zinc-500 mt-0.5">Booked against Quote #{reservation.quote_revision_number} · confirmed {formatDateTime(reservation.confirmed_at)}</p>
+            <p className="text-xs text-zinc-500 mt-0.5">
+              Booked against Quote #{reservation.quote_revision_number} · {reservation.source === 'customer' ? 'booked' : 'confirmed'} {formatDateTime(reservation.confirmed_at)}
+            </p>
+            {!reservation.estimated_ready_date && (
+              <p className="text-xs text-zinc-600 mt-1">The customer sees the start date as confirmed and the ready date as not yet provided until you set it.</p>
+            )}
+            {a.canSetReady && (
+              <button onClick={() => setDialog('ready')} className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-800 bg-white border border-emerald-200 hover:bg-emerald-50 rounded-lg px-2.5 py-1.5 mt-2">
+                <CalendarDays size={13} /> {reservation.estimated_ready_date ? 'Change ready date' : 'Set ready date'}
+              </button>
+            )}
             {reservation.internal_notes && (
               <p className="text-xs text-zinc-600 mt-1 whitespace-pre-wrap"><span className="font-medium">Internal:</span> {reservation.internal_notes}</p>
             )}
@@ -151,8 +176,21 @@ export default function LeadSchedulePanel({
           </Section>
         )}
 
+        {(reservation || state.deposit) && (
+          <DepositSection
+            deposit={state.deposit ?? null}
+            canManage={a.canManageDeposit}
+            onEdit={() => setDialog('deposit')}
+            onSetReceived={async (received) => {
+              const { error } = await setDepositReceived(lead.id, received)
+              await afterChange()
+              return error
+            }}
+          />
+        )}
+
         {pendingRequest && (
-          <Section icon={CalendarClock} tone="amber" title="Date requested — awaiting shop confirmation">
+          <Section icon={CalendarClock} tone="amber" title={pendingRequest.source === 'calendar' ? 'Earlier date request — confirm to book it' : 'Offered date chosen — confirm to book it'}>
             <p className="text-sm text-zinc-800">
               {pendingRequest.source === 'calendar' ? 'Customer requested ' : 'Customer chose '}
               <strong>{longDate(pendingRequest.start_date)}</strong>
@@ -210,7 +248,7 @@ export default function LeadSchedulePanel({
         )}
         {!reservation && !pendingRequest && !activeOffer && !draftOffer && a.canOffer && (
           <p className="text-sm text-zinc-500">
-            Waiting for the customer to request a start date from their quote link. You can also offer specific dates instead.
+            Waiting for the customer to book a start date from their quote link. It's confirmed as soon as they book. You can also offer specific dates instead.
           </p>
         )}
       </div>
@@ -242,7 +280,7 @@ export default function LeadSchedulePanel({
           <ul className="mt-2 space-y-1">
             {state.pastReservations.map((r) => (
               <li key={r.id} className="text-xs text-zinc-600">
-                <span className="font-medium capitalize">{r.status}</span>: {longDate(r.start_date)} – {longDate(r.estimated_ready_date)}
+                <span className="font-medium capitalize">{r.status}</span>: {bookingText(r)}
                 {r.ended_at ? ` · ${formatDateTime(r.ended_at)}` : ''}{r.cancel_reason ? ` · ${r.cancel_reason}` : ''}
               </li>
             ))}
@@ -278,7 +316,7 @@ export default function LeadSchedulePanel({
           startDate={pendingRequest.start_date}
           suggestedReady={suggestedReadyDate(pendingRequest.start_date, Number(state.currentQuote?.estimated_lead_time_days) || 0, addDays)}
           leadTimeDays={Number(state.currentQuote?.estimated_lead_time_days) || 0}
-          replacing={reservation ? `${longDate(reservation.start_date)} – ${longDate(reservation.estimated_ready_date)}` : null}
+          replacing={reservation ? bookingText(reservation) : null}
           onClose={() => setDialog(null)}
           onSubmit={async (ready, notes) => {
             const { error } = await confirmSchedule(pendingRequest.id, versionRef.current, ready, notes)
@@ -295,7 +333,7 @@ export default function LeadSchedulePanel({
       )}
       {dialog === 'cancel' && reservation && (
         <CancelScheduleDialog
-          booking={`${longDate(reservation.start_date)} – ${longDate(reservation.estimated_ready_date)}`}
+          booking={bookingText(reservation)}
           onClose={() => setDialog(null)}
           onSubmit={async (reason) => {
             const { error } = await cancelSchedule(lead.id, versionRef.current, reason)
@@ -308,6 +346,112 @@ export default function LeadSchedulePanel({
             return null
           }}
         />
+      )}
+      {dialog === 'ready' && reservation && (
+        <ReadyDateDialog
+          shopId={lead.shop_id}
+          leadId={lead.id}
+          startDate={reservation.start_date}
+          current={reservation.estimated_ready_date}
+          suggested={suggestedReadyDate(reservation.start_date, Number(state.currentQuote?.estimated_lead_time_days) || 0, addDays)}
+          onClose={() => setDialog(null)}
+          onSubmit={async (ready) => {
+            const { error } = await setScheduleReadyDate(lead.id, versionRef.current, ready)
+            if (error) {
+              await reload()
+              return error
+            }
+            setDialog(null)
+            await afterChange()
+            return null
+          }}
+        />
+      )}
+      {dialog === 'deposit' && (
+        <DepositDialog
+          deposit={state.deposit ?? null}
+          onClose={() => setDialog(null)}
+          onSubmit={async (requested, values) => {
+            const { error } = await setLeadDeposit(lead.id, requested, values)
+            if (error) return error
+            setDialog(null)
+            await afterChange()
+            return null
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+const DEPOSIT_TONES = {
+  not_required: 'bg-zinc-100 text-zinc-700 border-zinc-200',
+  awaiting: 'bg-amber-100 text-amber-800 border-amber-200',
+  received: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+} as const
+
+// Deposit tracking, separate from the project status. Staff confirm receipt by
+// hand; a payment-link click is never treated as payment.
+function DepositSection({ deposit, canManage, onEdit, onSetReceived }: {
+  deposit: LeadDeposit | null
+  canManage: boolean
+  onEdit: () => void
+  onSetReceived: (received: boolean) => Promise<string | null>
+}) {
+  const status = depositStatus(deposit)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const mark = async (received: boolean) => {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      setError(await onSetReceived(received))
+    } catch {
+      setError('Could not update the deposit. Please try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+  const link = deposit && isSafePaymentUrl(deposit.payment_url) ? deposit.payment_url : null
+  const btn = 'inline-flex items-center gap-1.5 text-xs font-medium rounded-lg px-2.5 py-1.5 border disabled:opacity-60'
+
+  return (
+    <div className="border border-zinc-200 bg-zinc-50/60 rounded-xl px-3 py-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs font-semibold text-zinc-700 flex items-center gap-1.5"><Wallet size={13} /> Deposit</p>
+        <span className={`text-[11px] font-semibold rounded-full border px-2 py-0.5 ${DEPOSIT_TONES[status]}`}>{DEPOSIT_STATUS_LABELS[status]}</span>
+      </div>
+      {deposit?.requested && (
+        <div className="text-xs text-zinc-700 mt-1.5 space-y-0.5">
+          <p>Amount: <strong>{deposit.amount != null ? formatCurrency(deposit.amount) : 'not specified'}</strong> <span className="text-zinc-400">(separate from the quote total)</span></p>
+          <p className="break-all">
+            Payment link:{' '}
+            {link ? <a href={link} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer" className="text-brand-700 underline inline-flex items-center gap-0.5">{link}<ExternalLink size={11} /></a> : <span className="text-zinc-500">none</span>}
+          </p>
+          {deposit.instructions && <p className="whitespace-pre-wrap">Instructions: {deposit.instructions}</p>}
+          {deposit.received_at && <p className="text-emerald-700">Marked received {formatDateTime(deposit.received_at)}. See the history for who confirmed it.</p>}
+          {deposit.source === 'shop_default' && <p className="text-zinc-500">From your Settings defaults when the customer booked. Later changes to the defaults don't affect it.</p>}
+        </div>
+      )}
+      {!deposit?.requested && <p className="text-xs text-zinc-500 mt-1">No deposit is requested for this job.</p>}
+      {error && <ErrorLine text={error} />}
+      {canManage && (
+        <div className="flex flex-wrap gap-2 mt-2">
+          <button onClick={onEdit} disabled={busy} className={`${btn} bg-white border-zinc-200 text-zinc-800 hover:bg-zinc-50`}>
+            <Pencil size={12} /> {deposit?.requested ? 'Edit deposit' : 'Request a deposit'}
+          </button>
+          {status === 'awaiting' && (
+            <button onClick={() => mark(true)} disabled={busy} className={`${btn} bg-emerald-600 border-emerald-600 text-white hover:bg-emerald-700`}>
+              {busy ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />} Mark deposit received
+            </button>
+          )}
+          {status === 'received' && (
+            <button onClick={() => mark(false)} disabled={busy} className={`${btn} bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50`}>
+              {busy ? <Loader2 size={12} className="animate-spin" /> : <Undo2 size={12} />} Undo received
+            </button>
+          )}
+        </div>
       )}
     </div>
   )
@@ -502,6 +646,90 @@ function ConfirmScheduleDialog({ shopId, leadId, startDate, suggestedReady, lead
           <DialogButtons busy={submit.busy} label="Confirm schedule" onCancel={onClose} onConfirm={submit.run} />
         </div>
       </div>
+    </Modal>
+  )
+}
+
+// Setting the booking's estimated-ready date later: an edit of the booking,
+// shown on the shop calendar as start through ready.
+function ReadyDateDialog({ shopId, leadId, startDate, current, suggested, onClose, onSubmit }: {
+  shopId: string
+  leadId: string
+  startDate: string
+  current: string | null
+  suggested: string
+  onClose: () => void
+  onSubmit: (ready: string) => Promise<string | null>
+}) {
+  const [ready, setReady] = useState(current ?? suggested)
+  const submit = useSubmit(async () => {
+    if (!ready) return 'Set the estimated-ready date.'
+    if (ready < startDate) return 'The estimated-ready date must be on or after the start date.'
+    return onSubmit(ready)
+  })
+  return (
+    <Modal title={current ? 'Change ready date' : 'Set ready date'} onClose={onClose} busy={submit.busy} wide>
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_18rem]">
+        <ScheduleContextCalendar shopId={shopId} leadId={leadId} initialFocus={startDate} mode={{ kind: 'confirm', start: startDate, ready: ready || null, onSetReady: setReady }} />
+        <div className="space-y-4 min-w-0">
+          <p className="text-sm text-zinc-700">Booked start: <strong>{longDate(startDate)}</strong></p>
+          <div>
+            <label className="block text-xs font-semibold text-zinc-600 mb-1">Estimated ready date</label>
+            <input type="date" min={startDate} value={ready} onChange={(e) => setReady(e.target.value)} className={inputCls} />
+            <p className="text-[11px] text-zinc-500 mt-1">The customer sees this on their quote link. Currently: {readyText(current)}.</p>
+          </div>
+          {submit.error && <ErrorLine text={submit.error} />}
+          <DialogButtons busy={submit.busy} label="Save ready date" onCancel={onClose} onConfirm={submit.run} />
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// The lead's deposit request: overrides the Settings defaults for this lead
+// (e.g. a customer-specific invoice link). Never changes the quote total.
+function DepositDialog({ deposit, onClose, onSubmit }: {
+  deposit: LeadDeposit | null
+  onClose: () => void
+  onSubmit: (requested: boolean, values: DepositValues) => Promise<string | null>
+}) {
+  const [requested, setRequested] = useState(deposit?.requested ?? true)
+  const [draft, setDraft] = useState<DepositDraft>(() => draftFromDeposit(deposit))
+  const checked = validateDepositDraft(draft, requested)
+  const [touched, setTouched] = useState(false)
+  const received = !!deposit?.received_at
+  const submit = useSubmit(async () => {
+    setTouched(true)
+    if (Object.keys(checked.errors).length > 0) return 'Check the highlighted fields.'
+    return onSubmit(requested, checked.values)
+  })
+  const fieldError = (key: keyof DepositDraft) => (touched && checked.errors[key] ? <p className="text-xs text-red-700 mt-1">{checked.errors[key]}</p> : null)
+  const set = (key: keyof DepositDraft) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setDraft((d) => ({ ...d, [key]: e.target.value }))
+
+  return (
+    <Modal title="Deposit" onClose={onClose} busy={submit.busy}>
+      <label className="flex items-start gap-2 text-sm text-zinc-800">
+        <input type="checkbox" checked={requested} disabled={received} onChange={(e) => setRequested(e.target.checked)} className="mt-0.5" />
+        <span>Request a deposit for this job{received && <span className="block text-xs text-zinc-500">Undo "received" before turning this off.</span>}</span>
+      </label>
+      <div>
+        <label className="block text-xs font-semibold text-zinc-600 mb-1">Payment link <span className="font-normal text-zinc-400">(https only; a customer-specific invoice link is fine)</span></label>
+        <input type="url" inputMode="url" autoCapitalize="none" spellCheck={false} value={draft.payment_url} onChange={set('payment_url')} placeholder="https://" className={inputCls} />
+        {fieldError('payment_url')}
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-zinc-600 mb-1">Amount <span className="font-normal text-zinc-400">(optional, USD)</span></label>
+        <input type="text" inputMode="decimal" value={draft.amount} onChange={set('amount')} placeholder="150.00" className={inputCls} />
+        {fieldError('amount')}
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-zinc-600 mb-1">Instructions <span className="font-normal text-zinc-400">(shown to the customer)</span></label>
+        <textarea value={draft.instructions} onChange={set('instructions')} rows={3} maxLength={DEPOSIT_INSTRUCTIONS_MAX} className={`${inputCls} resize-none`} />
+        {fieldError('instructions')}
+      </div>
+      <p className="text-[11px] text-zinc-500">Shown to the customer after booking. SpecPlus doesn't process the payment; mark it received once you have it.</p>
+      {submit.error && <ErrorLine text={submit.error} />}
+      <DialogButtons busy={submit.busy} label="Save deposit" onCancel={onClose} onConfirm={submit.run} />
     </Modal>
   )
 }

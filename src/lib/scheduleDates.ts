@@ -68,19 +68,27 @@ export function formatDateOnly(
   return new Date(toUtc(date)).toLocaleDateString('en-US', { ...options, timeZone: 'UTC' })
 }
 
-export function formatDateRange(start: DateOnly, end: DateOnly): string {
+// A null end is a booking whose ready date hasn't been estimated yet.
+export function formatDateRange(start: DateOnly, end: DateOnly | null): string {
+  if (end === null) return `Starts ${formatDateOnly(start, { weekday: 'short', month: 'short', day: 'numeric' })} · ready date not set`
   if (start === end) return formatDateOnly(start, { weekday: 'short', month: 'short', day: 'numeric' })
   return `${formatDateOnly(start, { month: 'short', day: 'numeric' })} – ${formatDateOnly(end, { month: 'short', day: 'numeric', year: 'numeric' })}`
 }
 
-export type AgendaJob = { start_date: DateOnly; estimated_ready_date: DateOnly }
+// Customer bookings start without an estimated-ready date (null) until staff
+// set one; until then the job covers only its start date.
+export type AgendaJob = { start_date: DateOnly; estimated_ready_date: DateOnly | null }
+
+export function jobEnd(job: AgendaJob): DateOnly {
+  return job.estimated_ready_date ?? job.start_date
+}
 
 // Confirmed jobs active on each day of the week (multi-day jobs appear on
 // every day they span; overlaps are allowed).
 export function jobsByDay<T extends AgendaJob>(jobs: T[], days: DateOnly[]): Map<DateOnly, T[]> {
   const map = new Map<DateOnly, T[]>()
   for (const day of days) {
-    map.set(day, jobs.filter((j) => isOnDay(j.start_date, j.estimated_ready_date, day)))
+    map.set(day, jobs.filter((j) => isOnDay(j.start_date, jobEnd(j), day)))
   }
   return map
 }

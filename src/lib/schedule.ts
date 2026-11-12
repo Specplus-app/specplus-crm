@@ -2,6 +2,7 @@ import { supabase } from './supabase'
 import type {
   LeadScheduleState, QuoteSummary, ScheduleOffer, ScheduleRequest, ScheduleReservation,
 } from './scheduleRules'
+import type { LeadDeposit, ShopDepositSettings } from './deposits'
 
 export * from './scheduleRules'
 export * from './customerScheduleState'
@@ -9,7 +10,7 @@ export * from './customerScheduleState'
 type Result<T> = { data: T | null; error: string | null }
 
 export async function loadLeadSchedule(leadId: string): Promise<Result<LeadScheduleState>> {
-  const [stateRes, offersRes, optionsRes, requestsRes, reservationsRes, quotesRes] = await Promise.all([
+  const [stateRes, offersRes, optionsRes, requestsRes, reservationsRes, quotesRes, depositRes] = await Promise.all([
     supabase.from('lead_schedule_states').select('version').eq('lead_id', leadId).maybeSingle(),
     supabase.from('schedule_offers').select('*').eq('lead_id', leadId).in('status', ['draft', 'active']),
     supabase.from('schedule_offer_options').select('id, offer_id, start_date').eq('lead_id', leadId),
@@ -17,8 +18,10 @@ export async function loadLeadSchedule(leadId: string): Promise<Result<LeadSched
     supabase.from('schedule_reservations').select('*').eq('lead_id', leadId).order('confirmed_at', { ascending: false }),
     supabase.from('quotes').select('id, revision_number, status, superseded_at, grand_total, estimated_lead_time_days').eq('lead_id', leadId)
       .order('revision_number', { ascending: false }).limit(1),
+    supabase.from('lead_deposits').select('lead_id, requested, payment_url, amount, instructions, source, received_at, received_by')
+      .eq('lead_id', leadId).maybeSingle(),
   ])
-  const failed = [stateRes, offersRes, optionsRes, requestsRes, reservationsRes, quotesRes].find((r) => r.error)
+  const failed = [stateRes, offersRes, optionsRes, requestsRes, reservationsRes, quotesRes, depositRes].find((r) => r.error)
   if (failed?.error) return { data: null, error: failed.error.message }
 
   const options = (optionsRes.data ?? []) as { id: string; offer_id: string; start_date: string }[]
@@ -51,9 +54,63 @@ export async function loadLeadSchedule(leadId: string): Promise<Result<LeadSched
       reservation: reservations.find((r) => r.status === 'active') ?? null,
       pastReservations: reservations.filter((r) => r.status !== 'active'),
       currentQuote: quote ? { ...quote, grand_total: Number(quote.grand_total) || 0 } : null,
+      deposit: depositRes.data ? normalizeDeposit(depositRes.data as LeadDeposit) : null,
     },
     error: null,
   }
+}
+
+// numeric columns can arrive as strings.
+function normalizeDeposit(row: LeadDeposit): LeadDeposit {
+  return { ...row, amount: row.amount == null ? null : Number(row.amount) }
+}
+
+// Sets the active booking's estimated-ready date (an edit, not a confirmation).
+export async function setScheduleReadyDate(leadId: string, version: number, readyDate: string): Promise<Result<{ version: number }>> {
+  const { data, error } = await supabase.rpc('set_schedule_ready_date', {
+    p_lead_id: leadId, p_expected_version: version, p_ready_date: readyDate,
+  })
+  if (error) return { data: null, error: error.message }
+  return { data: data as { version: number }, error: null }
+}
+
+export type DepositValues = { payment_url: string | null; amount: number | null; instructions: string | null }
+
+export async function setLeadDeposit(leadId: string, requested: boolean, values: DepositValues): Promise<Result<{ ok: true }>> {
+  const { data, error } = await supabase.rpc('set_lead_deposit', {
+    p_lead_id: leadId, p_requested: requested, p_payment_url: values.payment_url, p_amount: values.amount, p_instructions: values.instructions,
+  })
+  if (error) return { data: null, error: error.message }
+  return { data: data as { ok: true }, error: null }
+}
+
+export async function setDepositReceived(leadId: string, received: boolean): Promise<Result<{ ok: true }>> {
+  const { data, error } = await supabase.rpc('set_deposit_received', { p_lead_id: leadId, p_received: received })
+  if (error) return { data: null, error: error.message }
+  return { data: data as { ok: true }, error: null }
+}
+
+// Shop defaults (Settings). A shop without a row has deposits off.
+export async function loadShopDepositSettings(shopId: string): Promise<Result<ShopDepositSettings>> {
+  const { data, error } = await supabase.from('shop_deposit_settings').select('enabled, payment_url, amount, instructions')
+    .eq('shop_id', shopId).maybeSingle()
+  if (error) return { data: null, error: error.message }
+  const row = data as ShopDepositSettings | null
+  return {
+    data: row
+      ? { ...row, amount: row.amount == null ? null : Number(row.amount) }
+      : { enabled: false, payment_url: null, amount: null, instructions: null },
+    error: null,
+  }
+}
+
+export async function saveShopDepositSettings(shopId: string, settings: ShopDepositSettings): Promise<Result<{ ok: true }>> {
+  const { data, error } = await supabase.rpc('set_shop_deposit_settings', {
+    p_shop_id: shopId, p_enabled: settings.enabled, p_payment_url: settings.payment_url,
+    p_amount: settings.amount, p_instructions: settings.instructions,
+  })
+  if (error) return { data: null, error: error.message }
+  return { data: data as { ok: true }, error: null }
 }
 
 export async function createScheduleOffer(leadId: string, version: number, dates: string[], note: string): Promise<Result<{ offer_id: string }>> {

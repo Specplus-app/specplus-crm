@@ -33,7 +33,8 @@ customer / staff action ──► lead_events (existing audit trail, same transa
 | Customer quote message | ✓ link to CRM lead | | ✓ |
 | Shop/admin quote reply | | ✓ link to the customer's current quote | |
 | Quote approved / declined | | | ✓ |
-| Customer selected a production date | | | ✓ |
+| Customer selected an offered production date (shop confirms) | | | ✓ |
+| Customer booked a production date from the calendar ("Production date booked") | | | ✓ |
 | Staff moved a lead to Scheduled / In Progress / Completed / Lost | | | ✓ (other staff) |
 
 - **Recipients** are resolved in the database: shop email = `shops.contact_email`;
@@ -223,8 +224,9 @@ test contact email, a test customer email you control, and two staff accounts
    session (or letting it expire): tapping shows sign-in, then the lead.
 6. Customer sends a quote message → "New customer message" push; the shop
    contact inbox gets an email whose button opens the CRM lead.
-7. Customer approves the quote → "Quote approved". Customer selects an offered
-   production date → "Production date selected".
+7. Customer approves the quote → "Quote approved". Customer books a date from
+   the calendar → "Production date booked" (a customer who chooses one of the
+   shop's offered dates instead → "Production date selected").
 8. As A, move a lead to In Progress: A gets nothing; B (on another device) gets
    "Lead updated".
 9. As A, reply to the customer on the quote: the customer inbox gets

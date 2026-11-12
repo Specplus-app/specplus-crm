@@ -3,6 +3,7 @@
 // 20261028120000_add_customer_calendar_scheduling.sql are authoritative; these
 // only decide which actions to offer. No runtime imports, so it is unit tested.
 import type { DateOnly } from './scheduleDates'
+import type { LeadDeposit } from './deposits'
 
 export type ScheduleOfferStatus = 'draft' | 'active' | 'superseded' | 'invalidated' | 'withdrawn' | 'closed'
 export type ScheduleRequestStatus = 'pending' | 'confirmed' | 'replaced' | 'superseded' | 'invalidated' | 'cancelled'
@@ -39,7 +40,11 @@ export type ScheduleReservation = {
   quote_id: string
   quote_revision_number: number
   start_date: DateOnly
-  estimated_ready_date: DateOnly
+  // Null until staff estimate it (customer bookings start without one).
+  estimated_ready_date: DateOnly | null
+  // 'customer': booked by the customer from the calendar; 'staff': confirmed
+  // by staff from a request.
+  source: 'staff' | 'customer'
   internal_notes: string | null
   status: ScheduleReservationStatus
   confirmed_at: string
@@ -66,6 +71,8 @@ export type LeadScheduleState = {
   reservation: ScheduleReservation | null
   pastReservations: ScheduleReservation[]
   currentQuote: QuoteSummary | null
+  // The lead's deposit (lead_deposits), if any; tracked apart from the status.
+  deposit?: LeadDeposit | null
 }
 
 const STARTED = ['in_progress', 'completed']
@@ -79,6 +86,10 @@ export type ScheduleActions = {
   canOffer: boolean
   canConfirm: boolean
   canCancel: boolean
+  // Setting the booking's estimated-ready date (an edit of the booking).
+  canSetReady: boolean
+  // Editing the deposit request or confirming receipt.
+  canManageDeposit: boolean
   offerLabel: 'Offer dates' | 'Offer new dates' | 'Reschedule'
   // Why offering is unavailable, when it is.
   offerBlockedReason: string | null
@@ -115,6 +126,8 @@ export function scheduleActions(leadStatus: string, state: LeadScheduleState, re
     canOffer: offerBlockedReason === null,
     canConfirm: !readOnly && !started && !closed && approved && requestCurrent && !state.pendingRequestBlocked,
     canCancel: !readOnly && !started && !!reservation,
+    canSetReady: !readOnly && !!reservation,
+    canManageDeposit: !readOnly,
     offerLabel: reservation ? 'Reschedule' : state.activeOffer ? 'Offer new dates' : 'Offer dates',
     offerBlockedReason,
     scheduleMissing: leadStatus === 'scheduled' && !reservation,

@@ -254,6 +254,11 @@ export type LeadEventType =
   | 'schedule_confirmed'
   | 'schedule_cancelled'
   | 'schedule_options_invalidated'
+  | 'schedule_booked'
+  | 'schedule_ready_date_set'
+  | 'deposit_updated'
+  | 'deposit_received'
+  | 'deposit_receipt_undone'
 
 export type QuoteMessageSenderType = 'customer' | 'shop_user' | 'admin'
 

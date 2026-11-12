@@ -71,3 +71,14 @@ test('offer form validation and ready-date suggestion', () => {
   assert.equal(suggestedReadyDate('2026-12-29', 5, addDays), '2027-01-03')
   assert.equal(suggestedReadyDate('2026-12-29', 0, addDays), '2026-12-29')
 })
+
+test('the ready date and deposit are staff edits, blocked only for read-only shops', () => {
+  const customerBooking = { ...reservation, estimated_ready_date: null, source: 'customer' as const }
+  const booked = scheduleActions('scheduled', state({ reservation: customerBooking }), false)
+  assert.deepEqual([booked.canSetReady, booked.canManageDeposit, booked.canConfirm], [true, true, false],
+    'a customer booking needs no confirmation')
+  assert.equal(scheduleActions('in_progress', state({ reservation: customerBooking }), false).canSetReady, true, 'the estimate can be revised during work')
+  const readOnly = scheduleActions('scheduled', state({ reservation: customerBooking }), true)
+  assert.deepEqual([readOnly.canSetReady, readOnly.canManageDeposit], [false, false])
+  assert.equal(scheduleActions('approved', state(), false).canSetReady, false, 'nothing to edit before booking')
+})
