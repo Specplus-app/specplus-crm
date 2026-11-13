@@ -241,7 +241,10 @@ export default function QuoteBuilderPage() {
       if (!resp.ok) {
         setMessage({ type: 'error', text: json?.error ?? 'Could not send the quote. Please try again.' })
       } else {
-        setMessage({ type: 'success', text: `Quote #${selected.revision_number} emailed to ${lead.customer_email}.` })
+        setMessage({
+          type: 'success',
+          text: `Quote #${selected.revision_number} emailed to ${lead.customer_email}. They can approve it and book a start date from that same link; no separate scheduling link is needed.`,
+        })
       }
     } catch {
       setMessage({ type: 'error', text: 'Network error while sending the quote.' })
@@ -712,6 +715,12 @@ export default function QuoteBuilderPage() {
                       <ExternalLink size={14} /> Preview
                     </a>
                   </div>
+                )}
+                {customerUrl && (
+                  <p className="text-xs text-zinc-500 mt-3">
+                    This one quote link lets the customer approve, book a production start date and see any deposit request.
+                    You don't need to send a separate scheduling link.
+                  </p>
                 )}
               </div>
             )}

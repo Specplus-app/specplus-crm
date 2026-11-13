@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react'
 import { formatCurrency, supabase } from '../lib/supabase'
 import {
-  BOOK_FAILED, LOAD_FAILED, REQUEST_FAILED, customerScheduleReducer, customerScheduleView, initialCustomerSchedule,
+  BOOK_FAILED, LOAD_FAILED, REQUEST_FAILED, customerScheduleLoadKey, customerScheduleReducer, customerScheduleView, initialCustomerSchedule,
   requestErrorMessage, type PublicSchedule,
 } from '../lib/schedule'
 import { isSafePaymentUrl, type PublicDeposit } from '../lib/deposits'
@@ -19,19 +19,36 @@ const longDate = (d: string) => formatDateOnly(d, { weekday: 'long', month: 'lon
 // days only, never other customers' jobs); the booking is confirmed at once,
 // followed by the shop's deposit request if it has one. Shops can still offer
 // specific dates (their own booking and history are unchanged).
-export default function CustomerSchedule({ token, shopName, staffPreview, quoteApproved }: {
+//
+// The page mounts this before the quote is approved. Approval happens on the
+// same page with the same token, so the schedule reloads when quoteApproved
+// changes (the calendar only exists for an approved quote). When
+// revealOnApproval is set (the customer just approved here), the section is
+// scrolled into view once it appears.
+export default function CustomerSchedule({ token, shopName, staffPreview, quoteApproved, revealOnApproval = false, onAskQuestion }: {
   token: string
   shopName: string
   staffPreview: boolean
   quoteApproved: boolean
+  revealOnApproval?: boolean
+  // Jumps to the quote's existing conversation.
+  onAskQuestion: () => void
 }) {
   const [state, dispatch] = useReducer(customerScheduleReducer, initialCustomerSchedule)
   const loadSeq = useRef(0)
+  const sectionRef = useRef<HTMLDivElement>(null)
+  const revealed = useRef(false)
+
+  // Reload on approval as well as on a new token: the key changes, so load
+  // (and the effect below) run again. Each load supersedes any earlier one
+  // still in flight (see loadSeq), so a slow pre-approval response can never
+  // overwrite the post-approval calendar.
+  const loadKey = customerScheduleLoadKey(token, quoteApproved)
 
   // Never throws. Failures keep the last good data and show a retry.
   const load = useCallback(async () => {
     const id = ++loadSeq.current
-    dispatch({ type: 'loadStart', id })
+    dispatch({ type: 'loadStart', id, key: loadKey })
     try {
       const { data, error } = await supabase.rpc('get_public_schedule', { p_token: token })
       if (error) {
@@ -44,7 +61,7 @@ export default function CustomerSchedule({ token, shopName, staffPreview, quoteA
       console.error('Failed to load schedule:', err)
       dispatch({ type: 'loadFailure', id })
     }
-  }, [token])
+  }, [token, loadKey])
 
   useEffect(() => {
     load()
@@ -100,10 +117,40 @@ export default function CustomerSchedule({ token, shopName, staffPreview, quoteA
     }
   }
 
-  const view = customerScheduleView(state, quoteApproved)
+  const view = customerScheduleView(state, quoteApproved, loadKey)
+
+  // Bring the booking section into view once, right after approval on this
+  // page. Marked done only when the frame runs: a re-render (loading ->
+  // content) cancels a pending frame and schedules it again.
+  useEffect(() => {
+    if (!revealOnApproval || revealed.current || view === 'hidden') return
+    const frame = window.requestAnimationFrame(() => {
+      const el = sectionRef.current
+      if (!el) return
+      revealed.current = true
+      // Focus first: focusing during a smooth scroll can cut the scroll short.
+      el.focus({ preventScroll: true })
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [revealOnApproval, view])
+
   if (view === 'hidden') return null
 
-  const card = 'bg-obsidian-900/60 backdrop-blur-xl rounded-2xl border border-white/10 p-6 mb-5'
+  const highlight = revealOnApproval && !state.data?.booking
+  const cardProps = {
+    ref: sectionRef,
+    id: 'production-date',
+    tabIndex: -1,
+    className: `bg-obsidian-900/60 backdrop-blur-xl rounded-2xl border p-6 mb-5 scroll-mt-6 focus:outline-none ${
+      highlight ? 'border-cobalt-400/60 shadow-glass-card' : 'border-white/10'
+    }`,
+  }
+  const askLink = (
+    <button type="button" onClick={onAskQuestion} className="font-semibold text-cobalt-300 hover:text-white underline underline-offset-2">
+      Ask {shopName} a question
+    </button>
+  )
   const title = (
     <h2 className="text-sm font-semibold text-white mb-1 flex items-center gap-2">
       <CalendarDays size={15} className="text-cobalt-300" /> Production date
@@ -117,7 +164,7 @@ export default function CustomerSchedule({ token, shopName, staffPreview, quoteA
 
   if (view === 'loading') {
     return (
-      <div className={card} aria-busy="true">
+      <div {...cardProps} aria-busy="true">
         {title}
         <p className="flex items-center gap-2 text-sm text-slate-400 mt-2"><Loader2 size={14} className="animate-spin" /> Loading production dates…</p>
       </div>
@@ -125,7 +172,7 @@ export default function CustomerSchedule({ token, shopName, staffPreview, quoteA
   }
   if (view === 'error') {
     return (
-      <div className={card}>
+      <div {...cardProps}>
         {title}
         <div className="flex items-center justify-between gap-3 text-sm text-red-200 bg-red-500/10 border border-red-500/30 rounded-xl px-3 py-2 mt-2">
           <span className="flex items-center gap-2"><AlertCircle size={15} /> {LOAD_FAILED}</span>
@@ -136,9 +183,9 @@ export default function CustomerSchedule({ token, shopName, staffPreview, quoteA
   }
   if (view === 'empty') {
     return (
-      <div className={card}>
+      <div {...cardProps}>
         {title}
-        <p className="text-sm text-slate-400 mt-2">No production dates have been offered yet. {shopName} will share start dates here.</p>
+        <p className="text-sm text-slate-400 mt-2">There's no start date to book here right now. Need one? {askLink}.</p>
         {state.status === 'loading' && <p className="flex items-center gap-2 text-xs text-slate-500 mt-2"><Loader2 size={12} className="animate-spin" /> Refreshing…</p>}
       </div>
     )
@@ -152,7 +199,7 @@ export default function CustomerSchedule({ token, shopName, staffPreview, quoteA
   const calendarRequest = request?.source === 'calendar' ? request : null
 
   return (
-    <div className={card}>
+    <div {...cardProps}>
       {title}
 
       {state.status === 'error' && (
@@ -176,11 +223,17 @@ export default function CustomerSchedule({ token, shopName, staffPreview, quoteA
         </div>
       )}
       {deposit && <DepositCard deposit={deposit} shopName={shopName} />}
+      {booking && (
+        <p className="flex items-start gap-2 text-xs text-slate-400 mt-3">
+          <MessageSquare size={13} className="flex-shrink-0 mt-0.5" />
+          <span>Questions about your booking? {askLink}.</span>
+        </p>
+      )}
 
       {!booking && !offer && !calendar && state.data!.booking_unavailable && (
         <p className="flex items-start gap-2 text-sm text-slate-300 bg-white/5 border border-white/10 rounded-xl px-4 py-3 mt-3" role="status">
           <MessageSquare size={16} className="flex-shrink-0 mt-0.5 text-slate-400" />
-          <span>Online booking isn't available right now. Send {shopName} a message below to arrange your start date.</span>
+          <span>Online booking isn't available right now. {askLink} to arrange your start date.</span>
         </p>
       )}
 
@@ -237,7 +290,7 @@ export default function CustomerSchedule({ token, shopName, staffPreview, quoteA
       {calendar && (
         <>
           <p className="text-sm text-slate-400 mt-3 mb-3">
-            Choose a production start date and book it. Your date is confirmed right away.
+            Pick a start date, then tap Book It. Your date is confirmed right away.
           </p>
 
           {/* A date request sent before instant booking: still with the shop. */}
@@ -261,7 +314,7 @@ export default function CustomerSchedule({ token, shopName, staffPreview, quoteA
 
           <p className="flex items-start gap-2 text-xs text-slate-400 mt-3">
             <MessageSquare size={13} className="flex-shrink-0 mt-0.5" />
-            <span>Need a date after {longDate(calendar.latest)}, or one that isn't available? Send {shopName} a message below.</span>
+            <span>Need a date after {longDate(calendar.latest)}, or one that isn't available? {askLink}.</span>
           </p>
 
           {state.requestError && <p className="text-sm text-red-300 mt-3" role="alert">{state.requestError}</p>}

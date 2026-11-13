@@ -62,6 +62,10 @@ export type CustomerScheduleState = {
   data: PublicSchedule | null
   // Sequence number of the newest load; older responses are ignored.
   latestLoad: number
+  // Load key (customerScheduleLoadKey) of the newest load, and of the data
+  // shown. They differ right after approval until the reload lands.
+  pendingKey?: string
+  dataKey?: string
   // Offered option id chosen (offer flow).
   selected: string | null
   // Calendar date chosen (calendar flow).
@@ -71,7 +75,7 @@ export type CustomerScheduleState = {
 }
 
 export type CustomerScheduleAction =
-  | { type: 'loadStart'; id: number }
+  | { type: 'loadStart'; id: number; key?: string }
   | { type: 'loadSuccess'; id: number; data: PublicSchedule | null }
   | { type: 'loadFailure'; id: number }
   | { type: 'select'; optionId: string }
@@ -111,11 +115,11 @@ function keepDate(data: PublicSchedule | null, selectedDate: string | null): str
 export function customerScheduleReducer(state: CustomerScheduleState, action: CustomerScheduleAction): CustomerScheduleState {
   switch (action.type) {
     case 'loadStart':
-      return { ...state, status: 'loading', latestLoad: action.id }
+      return { ...state, status: 'loading', latestLoad: action.id, pendingKey: action.key }
     case 'loadSuccess':
       if (action.id !== state.latestLoad) return state
       return {
-        ...state, status: 'ready', data: action.data,
+        ...state, status: 'ready', data: action.data, dataKey: state.pendingKey,
         selected: keepSelection(action.data, state.selected), selectedDate: keepDate(action.data, state.selectedDate),
       }
     case 'loadFailure':
@@ -164,14 +168,28 @@ export type CustomerScheduleView = 'hidden' | 'loading' | 'error' | 'empty' | 'c
 
 // What to render. "empty" (an approved quote with nothing to choose yet) is a
 // successful load and is shown distinctly from a loading failure.
-export function customerScheduleView(state: CustomerScheduleState, quoteApproved: boolean): CustomerScheduleView {
-  if (!state.data) {
-    if (state.status === 'error') return 'error'
-    if (state.status === 'loading') return quoteApproved ? 'loading' : 'hidden'
-    return quoteApproved ? 'empty' : 'hidden'
-  }
-  if (state.data.offer || state.data.booking || state.data.calendar || state.data.booking_unavailable) return 'content'
-  return quoteApproved ? 'empty' : 'hidden'
+//
+// Right after approval on the same page, the last loaded data is still the
+// pre-approval schedule (nothing to choose). Until the post-approval reload
+// lands that shows as loading, never as "nothing to choose": pass the current
+// loadKey so data loaded for an earlier key (before approval) counts as stale,
+// including on the render before the reload has started.
+export function customerScheduleView(state: CustomerScheduleState, quoteApproved: boolean, loadKey?: string): CustomerScheduleView {
+  if (!state.data && state.status === 'error') return 'error'
+  const d = state.data
+  if (d && (d.offer || d.booking || d.calendar || d.booking_unavailable)) return 'content'
+  if (!quoteApproved) return 'hidden'
+  // A failed post-approval refresh: offer a retry rather than "nothing to choose".
+  if (state.status === 'error') return 'error'
+  if (state.status === 'loading' || (loadKey !== undefined && state.dataKey !== loadKey)) return 'loading'
+  return 'empty'
+}
+
+// Reloading the schedule is keyed by the quote token AND its approval: the
+// customer approves on the same page (same token), and the calendar only
+// exists once the quote is approved, so approval must trigger a fresh load.
+export function customerScheduleLoadKey(token: string, quoteApproved: boolean): string {
+  return `${token}:${quoteApproved ? 'approved' : 'pending'}`
 }
 
 export function requestErrorMessage(code: string | undefined): string {

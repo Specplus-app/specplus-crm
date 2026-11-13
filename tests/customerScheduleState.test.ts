@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  REQUEST_FAILED, calendarDateStatus, customerScheduleReducer, customerScheduleView, initialCustomerSchedule, requestErrorMessage,
+  REQUEST_FAILED, calendarDateStatus, customerScheduleLoadKey, customerScheduleReducer, customerScheduleView, initialCustomerSchedule,
+  requestErrorMessage,
   type CustomerScheduleAction, type CustomerScheduleState, type PublicSchedule,
 } from '../src/lib/customerScheduleState.ts'
 
@@ -210,4 +211,107 @@ test('a shop not taking online bookings shows a generic message instead of the c
   const message = requestErrorMessage('booking_unavailable')
   assert.match(message, /Online booking isn't available right now/)
   for (const word of ['trial', 'billing', 'subscription', 'read-only']) assert.ok(!message.toLowerCase().includes(word), word)
+})
+
+// ---------------------------------------------------------------------------
+// One quote link: approve on the page, then book in the same tab.
+// CustomerSchedule is mounted before approval; approval must start a fresh
+// load (customerScheduleLoadKey changes) and the view must never show the
+// pre-approval "nothing to choose" data as final.
+// ---------------------------------------------------------------------------
+
+const preApproval: PublicSchedule = { can_request: false, offer: null, calendar: null, booking_unavailable: false, request: null, booking: null }
+const approvedCalendar: PublicSchedule = {
+  can_request: true, offer: null, request: null, booking: null, booking_unavailable: false,
+  calendar: { earliest: '2026-11-13', latest: '2027-02-10', blocked_dates: ['2026-11-20'] },
+}
+
+test('approval on the same page changes the load key, so the schedule reloads without a new link', () => {
+  const token = '6f1c8e1a-2b3c-4d5e-8f90-123456789abc'
+  assert.notEqual(customerScheduleLoadKey(token, false), customerScheduleLoadKey(token, true), 'approval must trigger a reload')
+  assert.equal(customerScheduleLoadKey(token, true), customerScheduleLoadKey(token, true), 'no reload loop while nothing changes')
+  assert.notEqual(customerScheduleLoadKey(token, true), customerScheduleLoadKey('another-token', true))
+})
+
+test('sent, unapproved quote -> approve -> calendar appears -> Book It -> booked -> deposit, in one mount', () => {
+  // Mounted before approval: nothing to show yet.
+  let s = run([{ type: 'loadStart', id: 1 }, { type: 'loadSuccess', id: 1, data: preApproval }])
+  assert.equal(customerScheduleView(s, false), 'hidden', 'no booking section before approval')
+
+  // Approved on this page: the reload starts. The stale pre-approval data is
+  // shown as loading, not as "no start date to book".
+  s = run([{ type: 'loadStart', id: 2 }], s)
+  assert.equal(customerScheduleView(s, true), 'loading')
+
+  // The calendar arrives.
+  s = run([{ type: 'loadSuccess', id: 2, data: approvedCalendar }], s)
+  assert.equal(customerScheduleView(s, true), 'content')
+  assert.ok(s.data?.calendar, 'the booking calendar is shown')
+
+  // Pick a date and Book It: Scheduled immediately, no shop confirmation step.
+  s = run([{ type: 'selectDate', date: '2026-11-24' }, { type: 'submitStart' }, { type: 'bookAccepted', start_date: '2026-11-24' }, { type: 'submitSettled' }], s)
+  assert.deepEqual(s.data?.booking, { start_date: '2026-11-24', estimated_ready_date: null })
+  assert.equal(s.data?.calendar, null, 'no second calendar after booking')
+  assert.equal(s.submitting, false)
+
+  // The follow-up refresh brings the deposit link.
+  const deposit = { status: 'awaiting' as const, amount: 150, payment_url: 'https://pay.example.com/deposit', instructions: null }
+  s = run([{ type: 'loadStart', id: 3 }, {
+    type: 'loadSuccess', id: 3,
+    data: { ...preApproval, booking: { start_date: '2026-11-24', estimated_ready_date: null }, deposit },
+  }], s)
+  assert.equal(customerScheduleView(s, true), 'content')
+  assert.deepEqual(s.data?.deposit, deposit)
+})
+
+test('a slow pre-approval response never replaces the post-approval calendar', () => {
+  const s = run([
+    { type: 'loadStart', id: 1 }, // mounted before approval
+    { type: 'loadStart', id: 2 }, // approved: reload
+    { type: 'loadSuccess', id: 2, data: approvedCalendar },
+    { type: 'loadSuccess', id: 1, data: preApproval }, // the first response arrives late
+  ])
+  assert.equal(s.data, approvedCalendar)
+  assert.equal(customerScheduleView(s, true), 'content')
+
+  const lateFailure = run([{ type: 'loadFailure', id: 1 }], s)
+  assert.equal(lateFailure.status, 'ready', 'a late failure of the superseded load is ignored too')
+})
+
+test('a failed post-approval reload offers a retry instead of "nothing to book"', () => {
+  const failed = run([
+    { type: 'loadStart', id: 1 }, { type: 'loadSuccess', id: 1, data: preApproval },
+    { type: 'loadStart', id: 2 }, { type: 'loadFailure', id: 2 },
+  ])
+  assert.equal(customerScheduleView(failed, true), 'error')
+  assert.equal(customerScheduleView(failed, false), 'hidden', 'before approval there is nothing to retry')
+  const retried = run([{ type: 'loadStart', id: 3 }, { type: 'loadSuccess', id: 3, data: approvedCalendar }], failed)
+  assert.equal(customerScheduleView(retried, true), 'content')
+})
+
+test('legacy offers and existing bookings still show before the page learns of approval', () => {
+  const booked = run([{ type: 'loadStart', id: 1 }, { type: 'loadSuccess', id: 1, data: { ...preApproval, booking: { start_date: '2026-11-24', estimated_ready_date: '2026-12-01' } } }])
+  assert.equal(customerScheduleView(booked, false), 'content')
+  const offer = run([{ type: 'loadStart', id: 1 }, { type: 'loadSuccess', id: 1, data: offered }])
+  assert.equal(customerScheduleView(offer, true), 'content')
+  // A refresh in progress keeps showing loaded content (no flash to loading).
+  assert.equal(customerScheduleView(run([{ type: 'loadStart', id: 2 }], offer), true), 'content')
+})
+
+test('the render right after approval, before the reload starts, is loading, not "nothing to book"', () => {
+  const token = '6f1c8e1a-2b3c-4d5e-8f90-123456789abc'
+  const pending = customerScheduleLoadKey(token, false)
+  const approved = customerScheduleLoadKey(token, true)
+  // Loaded while the quote was still awaiting approval.
+  const s = run([{ type: 'loadStart', id: 1, key: pending }, { type: 'loadSuccess', id: 1, data: preApproval }])
+  assert.equal(customerScheduleView(s, false, pending), 'hidden')
+  // quoteApproved just flipped; no loadStart has been dispatched yet.
+  assert.equal(customerScheduleView(s, true, approved), 'loading', 'stale pre-approval data must not read as final')
+  // The reload lands with the calendar.
+  const loaded = run([{ type: 'loadStart', id: 2, key: approved }, { type: 'loadSuccess', id: 2, data: approvedCalendar }], s)
+  assert.equal(loaded.dataKey, approved)
+  assert.equal(customerScheduleView(loaded, true, approved), 'content')
+  // An approved quote with genuinely nothing to book (e.g. work already under way) is still "empty".
+  const nothingToBook = run([{ type: 'loadStart', id: 3, key: approved }, { type: 'loadSuccess', id: 3, data: preApproval }], s)
+  assert.equal(customerScheduleView(nothingToBook, true, approved), 'empty')
 })

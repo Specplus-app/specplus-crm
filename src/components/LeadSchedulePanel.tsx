@@ -248,7 +248,7 @@ export default function LeadSchedulePanel({
         )}
         {!reservation && !pendingRequest && !activeOffer && !draftOffer && a.canOffer && (
           <p className="text-sm text-zinc-500">
-            Waiting for the customer to book a start date from their quote link. It's confirmed as soon as they book. You can also offer specific dates instead.
+            Waiting for the customer to book a start date from the quote link they already have. It's confirmed as soon as they book, so there's no separate scheduling link to send. You can also offer specific dates instead.
           </p>
         )}
       </div>

@@ -650,3 +650,50 @@ test('staff can still reschedule and cancel a customer booking', async () => {
   // After cancelling, the customer can book again from the calendar.
   assert.equal((await book(token, D(9))).ok, true)
 })
+
+// ---------------------------------------------------------------------------
+// One quote link, start to finish (what the customer page does in one tab)
+// ---------------------------------------------------------------------------
+
+test('one link: a sent, unapproved quote is approved, booked and shows the deposit, with questions along the way', async () => {
+  await resetShop()
+  await setShopDeposit('shopA', true, 'https://pay.example.com/one-link', 200, null)
+  const leadId = await newLead('shopA')
+  const q = await createQuote(leadId, 'userA', 900)
+  await sendQuote(q.id, 'userA')
+  const token = q.public_token as string
+  const publicQuote = () => as(db, anon, async (tx: any) => one(tx, `SELECT public.get_public_quote($1) AS r`, [token])).then((r: any) => r.r)
+  const ask = (body: string) =>
+    as(db, anon, async (tx: any) => one(tx, `SELECT public.send_public_quote_message($1, $2) AS r`, [token, body])).then((r: any) => r.r)
+  const thread = () => as(db, anon, async (tx: any) => one(tx, `SELECT public.get_public_quote_messages($1) AS r`, [token])).then((r: any) => r.r as any[])
+
+  // Before approval the page loads a schedule with nothing to book, and a
+  // booking attempt is refused (the page must reload after approving).
+  assert.equal((await publicQuote()).status, 'sent')
+  const before = await publicSchedule(token)
+  assert.deepEqual([before.calendar, before.booking, before.can_request, before.booking_unavailable], [null, null, false, false])
+  assert.equal((await book(token, D(7))).error, 'quote_not_approved')
+
+  // A question before approving goes to the existing conversation.
+  assert.equal((await ask('Can you match my factory paint?')).ok, true)
+
+  // Approve with the same token: the very next schedule load has the calendar.
+  assert.equal((await approve(token)).ok, true)
+  assert.equal((await publicQuote()).status, 'approved')
+  const after = await publicSchedule(token)
+  assert.equal(after.can_request, true)
+  assert.deepEqual([after.calendar.earliest, after.booking], [D(1), null])
+
+  // Book It: Scheduled immediately, deposit link on the following load.
+  const r = await book(token, D(7))
+  assert.deepEqual([r.ok, r.start_date], [true, D(7)])
+  assert.equal(await leadStatus(leadId), 'scheduled')
+  const booked = await publicSchedule(token)
+  assert.deepEqual(booked.booking, { start_date: D(7), estimated_ready_date: null })
+  assert.equal(booked.calendar, null)
+  assert.deepEqual([booked.deposit.status, booked.deposit.amount, booked.deposit.payment_url], ['awaiting', 200, 'https://pay.example.com/one-link'])
+
+  // Questions still work after booking, in the same thread.
+  assert.equal((await ask('What time should I drop it off?')).ok, true)
+  assert.deepEqual((await thread()).map((m: any) => m.body), ['Can you match my factory paint?', 'What time should I drop it off?'])
+})

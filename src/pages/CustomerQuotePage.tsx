@@ -38,6 +38,8 @@ export default function CustomerQuotePage() {
   const [confirming, setConfirming] = useState(false)
   const [responding, setResponding] = useState(false)
   const [responseError, setResponseError] = useState<string | null>(null)
+  // The customer approved on this page: reveal and scroll to booking.
+  const [justApproved, setJustApproved] = useState(false)
 
   const validToken = !!token && UUID_RE.test(token)
 
@@ -48,10 +50,23 @@ export default function CustomerQuotePage() {
       return
     }
     const { data, error } = await supabase.rpc('get_public_quote', { p_token: token })
-    if (error) console.error('Failed to load quote:', error.message)
-    setQuote((data as PublicQuote | null) ?? null)
+    if (error) {
+      // A failed refresh (e.g. right after approving) keeps the quote shown.
+      console.error('Failed to load quote:', error.message)
+      setQuote((prev) => prev ?? null)
+    } else {
+      setQuote((data as PublicQuote | null) ?? null)
+    }
     setLoading(false)
   }, [token])
+
+  // The existing conversation for this quote; "Ask a question" jumps here.
+  // Focus first: focusing during a smooth scroll can cut the scroll short.
+  const askQuestion = useCallback(() => {
+    const box = document.getElementById('quote-message')
+    if (box instanceof HTMLTextAreaElement) box.focus({ preventScroll: true })
+    document.getElementById('quote-conversation')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [])
 
   useEffect(() => {
     loadQuote()
@@ -116,6 +131,12 @@ export default function CustomerQuotePage() {
     const result = data as { ok: boolean; error?: string } | null
     if (!result?.ok) {
       setResponseError(RESPONSE_ERRORS[result?.error ?? ''] ?? 'Your approval could not be recorded. Please try again.')
+    } else {
+      // Recorded: show it as approved straight away so the booking calendar
+      // loads now (CustomerSchedule reloads on approval), even if the quote
+      // refresh below is slow or fails. The refresh fills in approved_at.
+      setJustApproved(true)
+      setQuote((prev) => (prev ? { ...prev, status: 'approved', approved_at: prev.approved_at ?? new Date().toISOString() } : prev))
     }
     await loadQuote()
   }
@@ -181,7 +202,8 @@ export default function CustomerQuotePage() {
         )}
         {quote.status === 'approved' && (
           <Banner tone="success" icon={CheckCircle2}>
-            You approved this quote{quote.approved_at ? ` on ${formatDateTime(quote.approved_at)}` : ''}. {quote.shop.name} will be in touch about next steps.
+            You approved this quote{quote.approved_at ? ` on ${formatDateTime(quote.approved_at)}` : ''}.
+            {!quote.is_superseded && ' Your production date is below.'}
           </Banner>
         )}
         {quote.status === 'declined' && (
@@ -217,17 +239,40 @@ export default function CustomerQuotePage() {
           <div className="bg-obsidian-900/60 backdrop-blur-xl rounded-2xl border border-white/10 p-6 mb-5">
             <h2 className="text-sm font-semibold text-white mb-1">Ready to move forward?</h2>
             <p className="text-sm text-slate-400 mb-4">
-              Review the quote details below before approving. If you have a question or need a change, send the shop a message below.
+              Review the quote details below, then approve it and book your production start date right here on this page.
             </p>
             <button
               onClick={() => { setResponseError(null); setConfirming(true) }}
               disabled={quote.viewer_is_staff}
               className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl px-5 py-3 transition-colors"
             >
-              <CheckCircle2 size={18} /> Approve Quote
+              <CheckCircle2 size={18} /> Approve &amp; Schedule
+            </button>
+            <button
+              type="button"
+              onClick={askQuestion}
+              className="w-full flex items-center justify-center gap-2 mt-2 text-sm font-medium text-slate-300 hover:text-white rounded-xl px-5 py-2 transition-colors"
+            >
+              <MessageSquare size={15} /> Ask a question
             </button>
           </div>
         )}
+
+        {/* Production date: the booking calendar once approved (or a booking /
+            offered dates). Mounted once, in the same place before and after
+            approval, so it appears near the top as soon as the quote is approved. */}
+        {!quote.is_superseded && (
+          <CustomerSchedule
+            token={token!}
+            shopName={quote.shop.name}
+            staffPreview={quote.viewer_is_staff}
+            quoteApproved={quote.status === 'approved'}
+            revealOnApproval={justApproved}
+            onAskQuestion={askQuestion}
+          />
+        )}
+
+        {/* Quote details stay available below. */}
 
         {/* Visual */}
         {(quote.front_image_url || quote.rear_image_url) && (
@@ -307,11 +352,6 @@ export default function CustomerQuotePage() {
           </div>
         )}
 
-        {/* Production date: offered options (approved quote only) or a confirmed booking. */}
-        {!quote.is_superseded && (
-          <CustomerSchedule token={token!} shopName={quote.shop.name} staffPreview={quote.viewer_is_staff} quoteApproved={quote.status === 'approved'} />
-        )}
-
         {/* Conversation */}
         <CustomerConversation
           token={token!}
@@ -339,7 +379,7 @@ export default function CustomerQuotePage() {
           <div className="w-full max-w-md bg-obsidian-900 border border-white/10 rounded-2xl shadow-glass-card p-6" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-lg font-bold text-white">Approve this quote?</h2>
             <p className="text-sm text-slate-400 mt-2 leading-relaxed">
-              {`You're approving Quote #${quote.revision_number} for ${formatCurrency(Number(quote.grand_total))}. ${quote.shop.name} will be notified and will follow up about next steps.`}
+              {`You're approving Quote #${quote.revision_number} for ${formatCurrency(Number(quote.grand_total))}. ${quote.shop.name} will be notified, and you'll pick your production start date next, on this page.`}
             </p>
             <div className="flex gap-3 mt-6">
               <button
@@ -419,7 +459,7 @@ function CustomerConversation({
     messages.some((m) => m.revision_number !== currentRevision)
 
   return (
-    <div className="bg-obsidian-900/60 backdrop-blur-xl rounded-2xl border border-white/10 p-6 mb-5">
+    <div id="quote-conversation" className="bg-obsidian-900/60 backdrop-blur-xl rounded-2xl border border-white/10 p-6 mb-5 scroll-mt-6">
       <h2 className="text-sm font-semibold text-white mb-1 flex items-center gap-2">
         <MessageSquare size={15} className="text-cobalt-300" />
         Questions or changes?
@@ -456,6 +496,8 @@ function CustomerConversation({
       ) : (
         <>
           <textarea
+            id="quote-message"
+            aria-label={`Message to ${shopName}`}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="Ask a question or request a change…"
