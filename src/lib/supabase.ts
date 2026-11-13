@@ -184,6 +184,12 @@ export type Quote = {
   expires_at: string | null
   front_image_url: string | null
   rear_image_url: string | null
+  // This quote's deposit request (shown to the customer after booking).
+  // Off by default; when on, the payment link is required.
+  deposit_requested: boolean
+  deposit_payment_url: string | null
+  deposit_amount: number | null
+  deposit_instructions: string | null
   sent_at: string | null
   first_viewed_at: string | null
   last_viewed_at: string | null

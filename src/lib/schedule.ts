@@ -2,7 +2,7 @@ import { supabase } from './supabase'
 import type {
   LeadScheduleState, QuoteSummary, ScheduleOffer, ScheduleRequest, ScheduleReservation,
 } from './scheduleRules'
-import type { LeadDeposit, ShopDepositSettings } from './deposits'
+import type { LeadDeposit } from './deposits'
 
 export * from './scheduleRules'
 export * from './customerScheduleState'
@@ -86,29 +86,6 @@ export async function setLeadDeposit(leadId: string, requested: boolean, values:
 
 export async function setDepositReceived(leadId: string, received: boolean): Promise<Result<{ ok: true }>> {
   const { data, error } = await supabase.rpc('set_deposit_received', { p_lead_id: leadId, p_received: received })
-  if (error) return { data: null, error: error.message }
-  return { data: data as { ok: true }, error: null }
-}
-
-// Shop defaults (Settings). A shop without a row has deposits off.
-export async function loadShopDepositSettings(shopId: string): Promise<Result<ShopDepositSettings>> {
-  const { data, error } = await supabase.from('shop_deposit_settings').select('enabled, payment_url, amount, instructions')
-    .eq('shop_id', shopId).maybeSingle()
-  if (error) return { data: null, error: error.message }
-  const row = data as ShopDepositSettings | null
-  return {
-    data: row
-      ? { ...row, amount: row.amount == null ? null : Number(row.amount) }
-      : { enabled: false, payment_url: null, amount: null, instructions: null },
-    error: null,
-  }
-}
-
-export async function saveShopDepositSettings(shopId: string, settings: ShopDepositSettings): Promise<Result<{ ok: true }>> {
-  const { data, error } = await supabase.rpc('set_shop_deposit_settings', {
-    p_shop_id: shopId, p_enabled: settings.enabled, p_payment_url: settings.payment_url,
-    p_amount: settings.amount, p_instructions: settings.instructions,
-  })
   if (error) return { data: null, error: error.message }
   return { data: data as { ok: true }, error: null }
 }

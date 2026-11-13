@@ -174,6 +174,13 @@ export async function createQuoteRevision(previous: Quote): Promise<CreateResult
       expires_at: null,
       front_image_url: previous.front_image_url,
       rear_image_url: previous.rear_image_url,
+      // Same lead and customer: the revision starts with the previous
+      // revision's deposit request, shown and editable before it is sent.
+      // A booking's existing deposit is never rewritten by a revision.
+      deposit_requested: !!previous.deposit_requested,
+      deposit_payment_url: previous.deposit_requested ? previous.deposit_payment_url : null,
+      deposit_amount: previous.deposit_requested ? previous.deposit_amount : null,
+      deposit_instructions: previous.deposit_requested ? previous.deposit_instructions : null,
     })
     .select('*')
     .single()
@@ -208,6 +215,10 @@ export function normalizeQuote(row: Quote): Quote {
     tax_rate: num(row.tax_rate),
     tax_total: num(row.tax_total),
     grand_total: num(row.grand_total),
+    deposit_requested: !!row.deposit_requested,
+    deposit_payment_url: row.deposit_payment_url ?? null,
+    deposit_amount: row.deposit_amount == null ? null : Number(row.deposit_amount),
+    deposit_instructions: row.deposit_instructions ?? null,
   }
 }
 

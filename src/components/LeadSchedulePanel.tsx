@@ -431,7 +431,8 @@ function DepositSection({ deposit, canManage, onEdit, onSetReceived }: {
           </p>
           {deposit.instructions && <p className="whitespace-pre-wrap">Instructions: {deposit.instructions}</p>}
           {deposit.received_at && <p className="text-emerald-700">Marked received {formatDateTime(deposit.received_at)}. See the history for who confirmed it.</p>}
-          {deposit.source === 'shop_default' && <p className="text-zinc-500">From your Settings defaults when the customer booked. Later changes to the defaults don't affect it.</p>}
+          {deposit.source === 'quote' && <p className="text-zinc-500">From the quote the customer booked. Later quote revisions don't change it.</p>}
+          {deposit.source === 'shop_default' && <p className="text-zinc-500">From the former shop-wide deposit defaults when the customer booked.</p>}
         </div>
       )}
       {!deposit?.requested && <p className="text-xs text-zinc-500 mt-1">No deposit is requested for this job.</p>}
@@ -686,8 +687,9 @@ function ReadyDateDialog({ shopId, leadId, startDate, current, suggested, onClos
   )
 }
 
-// The lead's deposit request: overrides the Settings defaults for this lead
-// (e.g. a customer-specific invoice link). Never changes the quote total.
+// The lead's deposit request: corrects an outstanding link or requests a
+// deposit later for this lead (e.g. a customer-specific invoice link). It
+// takes precedence over the booked quote's request. Never changes the quote total.
 function DepositDialog({ deposit, onClose, onSubmit }: {
   deposit: LeadDeposit | null
   onClose: () => void

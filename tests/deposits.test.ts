@@ -2,7 +2,9 @@
 // (tests/instantBooking.db.test.ts).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { depositStatus, draftFromDeposit, isSafePaymentUrl, parseDepositAmount, validateDepositDraft } from '../src/lib/deposits.ts'
+import {
+  QUOTE_DEPOSIT_LINK_REQUIRED, depositStatus, draftFromDeposit, isSafePaymentUrl, parseDepositAmount, validateDepositDraft, validateQuoteDeposit,
+} from '../src/lib/deposits.ts'
 
 test('only safe https payment links are accepted, matching the server rule', () => {
   for (const bad of [
@@ -43,4 +45,29 @@ test('deposit status is separate from the project status', () => {
   assert.equal(depositStatus({ requested: false, received_at: null }), 'not_required')
   assert.equal(depositStatus({ requested: true, received_at: null }), 'awaiting')
   assert.equal(depositStatus({ requested: true, received_at: '2026-11-11T12:00:00Z' }), 'received')
+})
+
+// The quote builder's "Request a deposit" section (quotes.deposit_*).
+test('quote deposit off saves nothing, even with leftover field text', () => {
+  const r = validateQuoteDeposit(false, { payment_url: 'not a url', amount: 'abc', instructions: 'x' })
+  assert.deepEqual(r.errors, {})
+  assert.deepEqual(r.values, { deposit_requested: false, deposit_payment_url: null, deposit_amount: null, deposit_instructions: null })
+})
+
+test('quote deposit on needs this quote’s https link; amount and instructions are optional', () => {
+  assert.equal(validateQuoteDeposit(true, { payment_url: '', amount: '', instructions: 'Pay at drop-off' }).errors.payment_url, QUOTE_DEPOSIT_LINK_REQUIRED)
+  assert.match(validateQuoteDeposit(true, { payment_url: 'http://pay.example.com/x', amount: '', instructions: '' }).errors.payment_url ?? '', /secure payment link/)
+  assert.match(validateQuoteDeposit(true, { payment_url: 'https://pay.example.com/x', amount: '0', instructions: '' }).errors.amount ?? '', /between/)
+  const ok = validateQuoteDeposit(true, { payment_url: '  https://invoices.example.com/inv/42 ', amount: '$1,250.50', instructions: '  Due in 3 days. ' })
+  assert.deepEqual(ok.errors, {})
+  assert.deepEqual(ok.values, {
+    deposit_requested: true, deposit_payment_url: 'https://invoices.example.com/inv/42', deposit_amount: 1250.5, deposit_instructions: 'Due in 3 days.',
+  })
+  const linkOnly = validateQuoteDeposit(true, { payment_url: 'https://invoices.example.com/inv/43', amount: '', instructions: '' })
+  assert.deepEqual([linkOnly.values.deposit_amount, linkOnly.values.deposit_instructions], [null, null])
+})
+
+test('reopening a draft restores its saved deposit fields', () => {
+  assert.deepEqual(draftFromDeposit({ payment_url: 'https://invoices.example.com/inv/7', amount: 150, instructions: 'Thanks' }),
+    { payment_url: 'https://invoices.example.com/inv/7', amount: '150.00', instructions: 'Thanks' })
 })

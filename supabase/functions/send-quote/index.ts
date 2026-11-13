@@ -25,6 +25,15 @@ function approvedPreviewOrigin(origin: string | null): string | null {
 }
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+// Same rule as deposit_url_is_safe() and src/lib/deposits.ts: https only, a
+// dotted hostname and optional port, no credentials, whitespace, control
+// characters, quotes, backticks, backslashes or angle brackets.
+// eslint-disable-next-line no-control-regex
+const SAFE_PAYMENT_URL_RE = /^https:\/\/[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+(:[0-9]{1,5})?([/?#][^\s\x00-\x1f\x7f<>"'`\\]*)?$/
+function isSafePaymentUrl(value: unknown): boolean {
+  return typeof value === 'string' && value.length >= 12 && value.length <= 2000 && SAFE_PAYMENT_URL_RE.test(value)
+}
+
 const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
@@ -112,7 +121,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: quote, error: quoteError } = await userClient
       .from('quotes')
-      .select('id, lead_id, shop_id, status, revision_number, public_token, grand_total, expires_at, selected_parts, custom_line_items')
+      .select('id, lead_id, shop_id, status, revision_number, public_token, grand_total, expires_at, selected_parts, custom_line_items, deposit_requested, deposit_payment_url')
       .eq('id', quoteId)
       .maybeSingle()
     if (quoteError || !quote) {
@@ -128,6 +137,14 @@ Deno.serve(async (req: Request) => {
     const lineCount = Array.isArray(quote.custom_line_items) ? quote.custom_line_items.length : 0
     if (partCount === 0 && lineCount === 0) {
       return json(400, { error: 'Add at least one item before sending this quote.' })
+    }
+    // The deposit request is part of the saved quote. Checked on the stored
+    // row before any email is sent; the database enforces the same rule when
+    // the quote is marked sent.
+    if (quote.deposit_requested === true && !isSafePaymentUrl(quote.deposit_payment_url)) {
+      return json(400, {
+        error: "This quote requests a deposit but doesn't have a valid payment link. Add a secure https:// link for this quote and save it, or turn off the deposit request.",
+      })
     }
 
     const [{ data: lead }, { data: shop }] = await Promise.all([

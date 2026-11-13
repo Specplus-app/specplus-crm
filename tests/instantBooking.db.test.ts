@@ -78,10 +78,20 @@ const sendQuote = (quoteId: string, userKey: string) =>
 const approve = (token: string) =>
   as(db, anon, async (tx: any) => one(tx, `SELECT public.respond_to_quote($1, 'approve') AS r`, [token])).then((r: any) => r.r)
 
-async function approvedLead(shopKey: ShopKey = 'shopA', isCustom = true, name = 'Customer') {
+// This quote's deposit request, saved on the draft like the app does (a
+// direct UPDATE of the draft's columns, as the shop's staff).
+type QuoteDeposit = { url: string | null; amount?: number | null; instructions?: string | null }
+const setQuoteDeposit = (quoteId: string, userKey: string, requested: boolean, d: QuoteDeposit = { url: null }) =>
+  as(db, staff(userKey), async (tx: any) => (await tx.query(`UPDATE quotes SET deposit_requested = $2, deposit_payment_url = $3,
+    deposit_amount = $4, deposit_instructions = $5 WHERE id = $1 RETURNING *`,
+    [quoteId, requested, d.url, d.amount ?? null, d.instructions ?? null])).rows[0])
+const quoteRow = (quoteId: string) => one(db, `SELECT * FROM quotes WHERE id = $1`, [quoteId])
+
+async function approvedLead(shopKey: ShopKey = 'shopA', isCustom = true, name = 'Customer', deposit: QuoteDeposit | null = null) {
   const leadId = await newLead(shopKey, isCustom, name)
   const sender = shopKey === 'shopC' ? 'admin' : userFor(shopKey)
   const q = await createQuote(leadId, sender, 900)
+  if (deposit) await setQuoteDeposit(q.id, sender, true, deposit)
   await sendQuote(q.id, sender)
   assert.equal((await approve(q.public_token)).ok, true)
   return { leadId, quote: q, token: q.public_token as string }
@@ -109,9 +119,14 @@ async function setReady(leadId: string, userKey: string, ready: string | null) {
   return as(db, staff(userKey), async (tx: any) => one(tx, `SELECT public.set_schedule_ready_date($1, $2, $3::date) AS r`, [leadId, v, ready]))
     .then((r: any) => r.r)
 }
+// The retired shop-wide defaults: no longer callable by clients.
 const setShopDeposit = (shopKey: ShopKey, enabled: boolean, url: string | null, amount: number | null, instructions: string | null, userKey: string = userFor(shopKey)) =>
   as(db, staff(userKey), async (tx: any) => one(tx, `SELECT public.set_shop_deposit_settings($1, $2, $3, $4, $5) AS r`,
     [ids[shopKey], enabled, url, amount, instructions])).then((r: any) => r.r)
+// A shop-wide default row left over from before (e.g. on TEST): bookings must ignore it.
+const legacyShopDefault = (shopKey: ShopKey, url: string) =>
+  db.query(`INSERT INTO shop_deposit_settings (shop_id, enabled, payment_url, amount, instructions) VALUES ($1, true, $2, 75, 'Shop-wide terms.')
+    ON CONFLICT (shop_id) DO UPDATE SET enabled = true, payment_url = EXCLUDED.payment_url`, [ids[shopKey], url])
 const setLeadDeposit = (leadId: string, requested: boolean, url: string | null, amount: number | null, instructions: string | null, userKey = 'userA') =>
   as(db, staff(userKey), async (tx: any) => one(tx, `SELECT public.set_lead_deposit($1, $2, $3, $4, $5) AS r`,
     [leadId, requested, url, amount, instructions])).then((r: any) => r.r)
@@ -413,7 +428,7 @@ test('read-only shops cannot set ready dates or deposits; admins can', async () 
   }
   await assert.rejects(setReady(leadId, 'userC', D(7)), /read-only/)
   await assert.rejects(setLeadDeposit(leadId, true, null, null, 'Pay at pickup', 'userC'), /read-only/)
-  await assert.rejects(setShopDeposit('shopC', false, null, null, null), /read-only/)
+  await assert.rejects(setShopDeposit('shopC', false, null, null, null), /permission denied/, 'shop-wide defaults are retired')
   assert.equal((await setReady(leadId, 'admin', D(7))).ok, true)
   assert.equal((await setLeadDeposit(leadId, true, null, null, 'Pay at pickup', 'admin')).ok, true)
   await assert.rejects(setReceived(leadId, true, staff('userC')), /read-only/)
@@ -423,15 +438,16 @@ test('read-only shops cannot set ready dates or deposits; admins can', async () 
 // Deposits
 // ---------------------------------------------------------------------------
 
-test('deposit defaults are off; when on, booking snapshots them for the customer', async () => {
+test('quote deposits are off by default; when on, booking copies this quote’s request for the customer', async () => {
   await resetShop()
   const off = await approvedLead()
+  assert.equal(off.quote.deposit_requested, false, 'off by default for new quotes')
   await book(off.token, D(5))
   assert.equal((await publicSchedule(off.token)).deposit, null)
   assert.equal(await leadDeposit(off.leadId), undefined, 'not required')
 
-  assert.equal((await setShopDeposit('shopA', true, 'https://pay.example.com/shop-a?ref=deposit', 150, 'Pay within 3 days to hold your date.')).ok, true)
-  const on = await approvedLead()
+  const on = await approvedLead('shopA', true, 'Customer',
+    { url: 'https://pay.example.com/shop-a?ref=deposit', amount: 150, instructions: 'Pay within 3 days to hold your date.' })
   await book(on.token, D(6))
   const pub = await publicSchedule(on.token)
   assert.deepEqual(pub.booking, { start_date: D(6), estimated_ready_date: null }, 'the booking comes first')
@@ -440,25 +456,139 @@ test('deposit defaults are off; when on, booking snapshots them for the customer
   })
   for (const secret of ['received_by', 'updated_by', ids.userA]) assert.ok(!JSON.stringify(pub).includes(secret), secret)
   const row = await leadDeposit(on.leadId)
-  assert.deepEqual([row.requested, row.source], [true, 'shop_default'])
+  assert.deepEqual([row.requested, row.source, row.quote_id], [true, 'quote', on.quote.id])
   assert.ok((await events(on.leadId)).find((e: any) => e.event_type === 'schedule_booked').metadata.deposit_requested)
-
-  // Changing the defaults later never rewrites existing bookings.
-  await setShopDeposit('shopA', true, 'https://pay.example.com/new-link', 300, 'New terms.')
-  assert.deepEqual([(await publicSchedule(on.token)).deposit.amount, (await publicSchedule(on.token)).deposit.payment_url],
-    [150, 'https://pay.example.com/shop-a?ref=deposit'])
-  await setShopDeposit('shopA', false, 'https://pay.example.com/new-link', 300, 'New terms.')
-  assert.equal((await publicSchedule(on.token)).deposit.status, 'awaiting', 'turning the default off keeps existing requests')
-  assert.equal((await publicSchedule(off.token)).deposit, null, 'and never adds one to earlier bookings')
+  assert.equal((await publicSchedule(off.token)).deposit, null, 'another booking never gets it')
   // Customers returning to their link still see it.
   assert.equal((await publicSchedule(on.token)).deposit.payment_url, 'https://pay.example.com/shop-a?ref=deposit')
 })
 
-test('a lead-specific deposit overrides the defaults, before or after booking', async () => {
+test('no fallback to shop-wide defaults: a quote with the deposit off books without one', async () => {
   await resetShop()
-  await setShopDeposit('shopA', true, 'https://pay.example.com/default', 100, null)
-  // Before booking: a customer-specific invoice link.
-  const invoiced = await approvedLead()
+  await legacyShopDefault('shopA', 'https://pay.example.com/shop-wide')
+  const off = await approvedLead()
+  assert.equal((await book(off.token, D(5))).ok, true)
+  assert.equal(await leadStatus(off.leadId), 'scheduled')
+  assert.equal((await publicSchedule(off.token)).deposit, null, 'no deposit request or payment button')
+  assert.equal(await leadDeposit(off.leadId), undefined)
+  assert.equal((await events(off.leadId)).find((e: any) => e.event_type === 'schedule_booked').metadata.deposit_requested, false)
+
+  const on = await approvedLead('shopA', true, 'Customer', { url: 'https://invoices.example.com/inv/77' })
+  await book(on.token, D(6))
+  const pub = await publicSchedule(on.token)
+  assert.deepEqual([pub.deposit.payment_url, pub.deposit.amount, pub.deposit.instructions], ['https://invoices.example.com/inv/77', null, null],
+    'only this quote’s details; nothing filled in from the shop-wide row')
+  await assert.rejects(setShopDeposit('shopA', true, 'https://pay.example.com/x', null, null), /permission denied/)
+  await assert.rejects(setShopDeposit('shopA', true, 'https://pay.example.com/x', null, null, 'admin'), /permission denied/)
+})
+
+test('different customers and quotes keep their own payment links', async () => {
+  await resetShop()
+  const a = await approvedLead('shopA', true, 'Alex', { url: 'https://invoices.example.com/inv/A-1', amount: 100 })
+  const b = await approvedLead('shopA', false, 'Blair', { url: 'https://checkout.stripe.com/c/pay/cs_test_B2', amount: 250 })
+  const c = await approvedLead('shopA', true, 'Casey')
+  const other = await approvedLead('shopB', true, 'Dana', { url: 'https://pay.example.org/shop-b/inv/9' })
+  for (const [lead, date] of [[a, 5], [b, 6], [c, 7], [other, 8]] as const) assert.equal((await book(lead.token, D(date))).ok, true)
+  assert.deepEqual([(await publicSchedule(a.token)).deposit.payment_url, (await publicSchedule(a.token)).deposit.amount],
+    ['https://invoices.example.com/inv/A-1', 100])
+  assert.deepEqual([(await publicSchedule(b.token)).deposit.payment_url, (await publicSchedule(b.token)).deposit.amount],
+    ['https://checkout.stripe.com/c/pay/cs_test_B2', 250])
+  assert.equal((await publicSchedule(c.token)).deposit, null)
+  assert.equal((await publicSchedule(other.token)).deposit.payment_url, 'https://pay.example.org/shop-b/inv/9')
+
+  // A new quote starts off: nothing is copied from another customer's quote.
+  const fresh = await createQuote(await newLead('shopA'), 'userA', 500)
+  assert.deepEqual([fresh.deposit_requested, fresh.deposit_payment_url, fresh.deposit_amount], [false, null, null])
+  // Staff of another shop can't read or change this shop's quote deposit.
+  assert.equal(await setQuoteDeposit(fresh.id, 'userB', true, { url: 'https://evil.example.com/pay' }), undefined, 'RLS: no row updated')
+  assert.equal((await quoteRow(fresh.id)).deposit_requested, false)
+  const visible = await as(db, staff('userB'), async (tx: any) => (await tx.query(`SELECT id FROM quotes WHERE id = $1`, [fresh.id])).rows)
+  assert.equal(visible.length, 0)
+})
+
+test('a draft keeps its deposit settings when reopened; off clears them', async () => {
+  await resetShop()
+  const leadId = await newLead('shopA')
+  const q = await createQuote(leadId, 'userA', 800)
+  await setQuoteDeposit(q.id, 'userA', true, { url: '  https://invoices.example.com/inv/5001  ', amount: 200, instructions: '  Pay within 3 days.  ' })
+  // Reopening the draft (a fresh read) restores the saved, trimmed values.
+  const saved = await quoteRow(q.id)
+  assert.deepEqual([saved.status, saved.deposit_requested, saved.deposit_payment_url, Number(saved.deposit_amount), saved.deposit_instructions],
+    ['draft', true, 'https://invoices.example.com/inv/5001', 200, 'Pay within 3 days.'])
+  // The rest of the draft saves in the same update without touching it.
+  await as(db, staff('userA'), async (tx: any) => tx.query(`UPDATE quotes SET customer_notes = 'See you soon' WHERE id = $1`, [q.id]))
+  assert.equal((await quoteRow(q.id)).deposit_payment_url, 'https://invoices.example.com/inv/5001')
+
+  await setQuoteDeposit(q.id, 'userA', false, { url: 'https://invoices.example.com/inv/5001', amount: 200 })
+  const off = await quoteRow(q.id)
+  assert.deepEqual([off.deposit_requested, off.deposit_payment_url, off.deposit_amount, off.deposit_instructions], [false, null, null, null])
+})
+
+test('invalid or missing links fail the save, and a failed save leaves the quote unsendable as requested', async () => {
+  await resetShop()
+  const leadId = await newLead('shopA')
+  const q = await createQuote(leadId, 'userA', 800)
+  for (const bad of ['http://pay.example.com/x', 'javascript:alert(1)', 'https://user:pass@pay.example.com/x', 'https://pay.example.com/a b', 'ftp://pay.example.com']) {
+    await assert.rejects(setQuoteDeposit(q.id, 'userA', true, { url: bad }), /secure payment link/, bad)
+  }
+  await assert.rejects(setQuoteDeposit(q.id, 'userA', true, { url: null, instructions: 'Pay at drop-off' }), /payment link/)
+  await assert.rejects(setQuoteDeposit(q.id, 'userA', true, { url: 'https://pay.example.com/x', amount: 0 }), /deposit amount/)
+  const after = await quoteRow(q.id)
+  assert.deepEqual([after.deposit_requested, after.deposit_payment_url], [false, null], 'nothing was saved')
+  // Bypassing the column checks is impossible too: the table constraint holds.
+  await assert.rejects(db.query(`UPDATE quotes SET deposit_requested = true, deposit_payment_url = NULL WHERE id = $1`, [q.id]), /payment link|check constraint/)
+})
+
+test('a sent quote’s deposit request is locked; revising never rewrites a booked or received deposit', async () => {
+  await resetShop()
+  const first = await approvedLead('shopA', true, 'Customer', { url: 'https://invoices.example.com/inv/R1', amount: 100 })
+  // Even a privileged write can't change a sent quote's deposit terms.
+  await assert.rejects(db.query(`UPDATE quotes SET deposit_payment_url = 'https://invoices.example.com/other' WHERE id = $1`, [first.quote.id]),
+    /sent quote cannot be changed/)
+  assert.equal(await setQuoteDeposit(first.quote.id, 'userA', false), undefined, 'staff cannot update a sent quote (RLS)')
+  await book(first.token, D(5))
+  await setReceived(first.leadId, true)
+
+  // Revise: new terms on Quote #2, sent and approved.
+  const r2 = await createQuote(first.leadId, 'userA', 950, first.quote.id)
+  assert.equal(r2.revision_number, 2)
+  await setQuoteDeposit(r2.id, 'userA', true, { url: 'https://invoices.example.com/inv/R2', amount: 400 })
+  await sendQuote(r2.id, 'userA')
+  assert.equal((await approve(r2.public_token)).ok, true)
+  const pub = await publicSchedule(r2.public_token)
+  assert.deepEqual([pub.deposit.status, pub.deposit.amount, pub.deposit.payment_url], ['received', 100, 'https://invoices.example.com/inv/R1'],
+    'the booked, received deposit is untouched')
+  const row = await leadDeposit(first.leadId)
+  assert.deepEqual([row.quote_id, row.received_at !== null], [first.quote.id, true])
+  assert.deepEqual([(await quoteRow(first.quote.id)).deposit_payment_url, Number((await quoteRow(first.quote.id)).deposit_amount)],
+    ['https://invoices.example.com/inv/R1', 100], 'the sent revision keeps its own terms')
+})
+
+test('before booking, the booked revision’s deposit request is the one used', async () => {
+  await resetShop()
+  const first = await approvedLead('shopA', true, 'Customer', { url: 'https://invoices.example.com/inv/V1', amount: 100 })
+  // Revised to drop the deposit, then booked: no deposit request.
+  const r2 = await createQuote(first.leadId, 'userA', 950, first.quote.id)
+  await sendQuote(r2.id, 'userA')
+  assert.equal((await approve(r2.public_token)).ok, true)
+  assert.equal((await book(r2.public_token, D(6))).ok, true)
+  assert.equal((await publicSchedule(r2.public_token)).deposit, null)
+
+  // Another lead revised from no deposit to a new link: the new link is used.
+  const plain = await approvedLead()
+  const p2 = await createQuote(plain.leadId, 'userA', 990, plain.quote.id)
+  await setQuoteDeposit(p2.id, 'userA', true, { url: 'https://invoices.example.com/inv/V2' })
+  await sendQuote(p2.id, 'userA')
+  await approve(p2.public_token)
+  await book(p2.public_token, D(7))
+  assert.equal((await publicSchedule(p2.public_token)).deposit.payment_url, 'https://invoices.example.com/inv/V2')
+  assert.equal((await leadDeposit(plain.leadId)).quote_id, p2.id)
+})
+
+test('a deposit set on the lead takes precedence over the quote, before or after booking', async () => {
+  await resetShop()
+  // Before booking: a customer-specific invoice link set on the lead.
+  const invoiced = await approvedLead('shopA', true, 'Customer', { url: 'https://pay.example.com/from-quote', amount: 100 })
   await setLeadDeposit(invoiced.leadId, true, 'https://invoices.example.com/inv/12345', 425.5, 'Invoice #12345.')
   assert.equal((await publicSchedule(invoiced.token)).deposit, null, 'shown only once booked')
   await book(invoiced.token, D(7))
@@ -466,7 +596,7 @@ test('a lead-specific deposit overrides the defaults, before or after booking', 
     { status: 'awaiting', amount: 425.5, payment_url: 'https://invoices.example.com/inv/12345', instructions: 'Invoice #12345.' })
 
   // After booking: staff correct an outstanding link.
-  const booked = await approvedLead()
+  const booked = await approvedLead('shopA', true, 'Customer', { url: 'https://pay.example.com/default', amount: 100 })
   await book(booked.token, D(8))
   assert.equal((await setLeadDeposit(booked.leadId, true, 'https://pay.example.com/corrected', 100, null)).ok, true)
   assert.equal((await publicSchedule(booked.token)).deposit.payment_url, 'https://pay.example.com/corrected')
@@ -478,23 +608,32 @@ test('a lead-specific deposit overrides the defaults, before or after booking', 
   await setLeadDeposit(booked.leadId, false, null, null, null)
   assert.equal((await publicSchedule(booked.token)).deposit, null)
   await assert.rejects(setLeadDeposit(booked.leadId, true, null, null, null, 'userB'), /Lead not found/)
+
+  // Requesting a deposit later, after a booking made without one.
+  const later = await approvedLead()
+  await book(later.token, D(9))
+  assert.equal((await publicSchedule(later.token)).deposit, null)
+  assert.equal((await setLeadDeposit(later.leadId, true, 'https://invoices.example.com/inv/late', 80, null)).ok, true)
+  assert.deepEqual([(await publicSchedule(later.token)).deposit.status, (await publicSchedule(later.token)).deposit.payment_url],
+    ['awaiting', 'https://invoices.example.com/inv/late'])
 })
 
 test('payment links must be safe https URLs, on the server', async () => {
   await resetShop()
   const { leadId } = await approvedLead()
+  const draft = await createQuote(await newLead('shopA'), 'userA', 300)
   for (const bad of [
     'http://pay.example.com/x', 'javascript:alert(1)', 'data:text/html,<b>x</b>', 'https://user:pass@pay.example.com/x',
     'https://pay@example.com', 'https://pay.example.com/a b', 'https://localhost/pay', 'ftp://pay.example.com',
     ' https://pay.example.com/<script>', 'https://pay.example.com/"onmouseover', 'HTTPS://', 'https://.example.com',
   ]) {
     await assert.rejects(setLeadDeposit(leadId, true, bad, null, null), /secure payment link/, bad)
-    await assert.rejects(setShopDeposit('shopA', true, bad, null, null), /secure payment link/, bad)
+    await assert.rejects(setQuoteDeposit(draft.id, 'userA', true, { url: bad }), /secure payment link/, bad)
   }
   for (const good of ['https://pay.example.com', 'https://checkout.stripe.com/c/pay/cs_test_a1#fid=x', 'https://example.co.uk:8443/p?a=1&b=@x']) {
     assert.equal((await setLeadDeposit(leadId, true, good, null, null)).ok, true, good)
+    assert.equal((await setQuoteDeposit(draft.id, 'userA', true, { url: good })).deposit_payment_url, good)
   }
-  await assert.rejects(setShopDeposit('shopA', true, null, 50, null), /payment link or payment instructions/)
   for (const amount of [0, -5, 1000001, 10.005]) {
     await assert.rejects(setLeadDeposit(leadId, true, null, amount, 'x'), /deposit amount/, String(amount))
   }
@@ -502,8 +641,7 @@ test('payment links must be safe https URLs, on the server', async () => {
 
 test('only shop staff confirm receipt, and history records who', async () => {
   await resetShop()
-  await setShopDeposit('shopA', true, 'https://pay.example.com/a', 200, null)
-  const { leadId, token } = await approvedLead()
+  const { leadId, token } = await approvedLead('shopA', true, 'Customer', { url: 'https://pay.example.com/a', amount: 200 })
   await book(token, D(9))
   await assert.rejects(setReceived(leadId, true, staff('userB')), /Lead not found/)
   await assert.rejects(setReceived(leadId, true, anon), /permission denied/)
@@ -530,8 +668,8 @@ test('only shop staff confirm receipt, and history records who', async () => {
 test('a received deposit amount cannot silently change; links and instructions can be corrected', async () => {
   await resetShop()
   // The reproduction: request $100, book, mark received, change to $900.
-  await setShopDeposit('shopA', true, 'https://pay.example.com/a', 100, 'Pay to hold your date.')
-  const { leadId, token } = await approvedLead()
+  const { leadId, token } = await approvedLead('shopA', true, 'Customer',
+    { url: 'https://pay.example.com/a', amount: 100, instructions: 'Pay to hold your date.' })
   await book(token, D(9))
   await setReceived(leadId, true)
   const row = await leadDeposit(leadId)
@@ -569,14 +707,13 @@ test('a received deposit amount cannot silently change; links and instructions c
 
 test('deposit configuration problems never block or undo a booking', async () => {
   await resetShop()
-  await setShopDeposit('shopA', true, 'https://pay.example.com/a', 50, null)
   await db.exec(`
     CREATE FUNCTION public.test_fail_deposit() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN RAISE EXCEPTION 'simulated deposit failure'; END $$;
     CREATE TRIGGER test_fail_deposit BEFORE INSERT ON public.lead_deposits FOR EACH ROW EXECUTE FUNCTION public.test_fail_deposit();
   `)
   try {
-    const { leadId, token } = await approvedLead()
+    const { leadId, token } = await approvedLead('shopA', true, 'Customer', { url: 'https://pay.example.com/a', amount: 50 })
     const r = await book(token, D(11))
     assert.equal(r.ok, true)
     assert.ok(await activeReservation(leadId))
@@ -657,9 +794,10 @@ test('staff can still reschedule and cancel a customer booking', async () => {
 
 test('one link: a sent, unapproved quote is approved, booked and shows the deposit, with questions along the way', async () => {
   await resetShop()
-  await setShopDeposit('shopA', true, 'https://pay.example.com/one-link', 200, null)
   const leadId = await newLead('shopA')
   const q = await createQuote(leadId, 'userA', 900)
+  // Set while completing the quote, before sending.
+  await setQuoteDeposit(q.id, 'userA', true, { url: 'https://pay.example.com/one-link', amount: 200 })
   await sendQuote(q.id, 'userA')
   const token = q.public_token as string
   const publicQuote = () => as(db, anon, async (tx: any) => one(tx, `SELECT public.get_public_quote($1) AS r`, [token])).then((r: any) => r.r)

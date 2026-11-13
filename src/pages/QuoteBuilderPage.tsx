@@ -7,10 +7,13 @@ import {
   leadBuildDiffersFromQuote, leadVisualSnapshot, lineItemTotal, newLineItem, normalizeQuote, openDraftQuote,
   partNeedsPrice, partsNeedingPrice, customerQuoteUrl, staffPreviewUrl,
 } from '../lib/quotes'
+import {
+  DEPOSIT_INSTRUCTIONS_MAX, DEPOSIT_STATUS_LABELS, depositStatus, draftFromDeposit, validateQuoteDeposit, type DepositDraft, type LeadDeposit,
+} from '../lib/deposits'
 import QuoteVehiclePhotos from '../components/QuoteVehiclePhotos'
 import QuoteBuildItemEditor from '../components/QuoteBuildItemEditor'
 import {
-  AlertCircle, ArrowLeft, Check, Copy, ExternalLink, FileText, Loader2, Lock, Plus, RefreshCw, Save, Send, Trash2,
+  AlertCircle, ArrowLeft, Check, Copy, ExternalLink, FileText, Loader2, Lock, Plus, RefreshCw, Save, Send, Trash2, Wallet,
 } from 'lucide-react'
 
 type DraftForm = {
@@ -23,6 +26,10 @@ type DraftForm = {
   customer_notes: string
   internal_notes: string
   expires_at: string
+  // This quote's deposit request; details are kept while toggled off during
+  // editing but only saved when it is on.
+  deposit_requested: boolean
+  deposit: DepositDraft
 }
 
 function formFromQuote(q: Quote): DraftForm {
@@ -36,6 +43,8 @@ function formFromQuote(q: Quote): DraftForm {
     customer_notes: q.customer_notes ?? '',
     internal_notes: q.internal_notes ?? '',
     expires_at: q.expires_at ?? '',
+    deposit_requested: !!q.deposit_requested,
+    deposit: draftFromDeposit({ payment_url: q.deposit_payment_url, amount: q.deposit_amount, instructions: q.deposit_instructions }),
   }
 }
 
@@ -55,13 +64,22 @@ export default function QuoteBuilderPage() {
   const [message, setMessage] = useState<Message>(null)
   const [copied, setCopied] = useState(false)
   const [addingItem, setAddingItem] = useState(false)
+  // Show deposit field errors once the shop tries to save or send.
+  const [depositTouched, setDepositTouched] = useState(false)
+  // A deposit already on the lead (set on the lead, or from an earlier
+  // booking) is kept as is; this quote's setting never replaces it.
+  const [leadDeposit, setLeadDeposit] = useState<LeadDeposit | null>(null)
 
   const loadAll = useCallback(async (selectId?: string) => {
     if (!leadId) return
-    const [leadRes, quotesRes] = await Promise.all([
+    const [leadRes, quotesRes, depositRes] = await Promise.all([
       supabase.from('leads').select('*').eq('id', leadId).maybeSingle(),
       supabase.from('quotes').select('*').eq('lead_id', leadId).order('revision_number', { ascending: false }),
+      supabase.from('lead_deposits').select('lead_id, requested, payment_url, amount, instructions, source, received_at, received_by')
+        .eq('lead_id', leadId).maybeSingle(),
     ])
+    if (depositRes.error) console.error('Failed to load lead deposit:', depositRes.error.message)
+    setLeadDeposit((depositRes.data as LeadDeposit | null) ?? null)
     if (leadRes.error) console.error('Failed to load lead:', leadRes.error.message)
     if (quotesRes.error) console.error('Failed to load quotes:', quotesRes.error.message)
     setLead((leadRes.data as Lead | null) ?? null)
@@ -71,6 +89,7 @@ export default function QuoteBuilderPage() {
     setSelectedId(next?.id ?? null)
     setForm(next && next.status === 'draft' ? formFromQuote(next) : null)
     setDirty(false)
+    setDepositTouched(false)
     setLoading(false)
   }, [leadId])
 
@@ -106,6 +125,7 @@ export default function QuoteBuilderPage() {
     setSelectedId(q.id)
     setForm(q.status === 'draft' ? formFromQuote(q) : null)
     setDirty(false)
+    setDepositTouched(false)
     setMessage(null)
   }
 
@@ -162,8 +182,17 @@ export default function QuoteBuilderPage() {
     setMessage({ type: 'success', text: 'Draft updated from the current build. Review it, then save or send.' })
   }
 
+  const depositCheck = form ? validateQuoteDeposit(form.deposit_requested, form.deposit) : null
+
+  // The deposit request is saved in the same update as the rest of the draft,
+  // so the draft and its deposit settings save (or fail) together.
   const saveDraft = async (): Promise<boolean> => {
-    if (!selected || !form) return false
+    if (!selected || !form || !depositCheck) return false
+    if (Object.keys(depositCheck.errors).length > 0) {
+      setDepositTouched(true)
+      setMessage({ type: 'error', text: 'Fix the deposit details before saving.' })
+      return false
+    }
     const { data, error } = await supabase
       .from('quotes')
       .update({
@@ -181,6 +210,7 @@ export default function QuoteBuilderPage() {
         customer_notes: form.customer_notes.trim() || null,
         internal_notes: form.internal_notes.trim() || null,
         expires_at: form.expires_at || null,
+        ...depositCheck.values,
       })
       .eq('id', selected.id)
       .select('*')
@@ -220,10 +250,20 @@ export default function QuoteBuilderPage() {
       setMessage({ type: 'error', text: 'The expiration date is in the past.' })
       return
     }
-    if (!window.confirm(`Send Quote #${selected.revision_number} to ${lead.customer_email}? Once sent, its pricing can no longer be edited.`)) return
+    if (depositCheck && Object.keys(depositCheck.errors).length > 0) {
+      setDepositTouched(true)
+      setMessage({ type: 'error', text: 'Fix the deposit details before sending.' })
+      return
+    }
+    const depositNote = form.deposit_requested
+      ? ' After booking a date, the customer will see this quote\'s deposit payment link.'
+      : ' No deposit will be requested.'
+    if (!window.confirm(`Send Quote #${selected.revision_number} to ${lead.customer_email}? Once sent, its pricing and deposit request can no longer be edited.${depositNote}`)) return
 
     setBusy('send')
     setMessage(null)
+    // Persist the draft (including its deposit request) before any email; a
+    // failed save stops here and nothing is sent.
     if (dirty && !(await saveDraft())) {
       setBusy(null)
       return
@@ -651,6 +691,16 @@ export default function QuoteBuilderPage() {
                 </div>
               )}
 
+              <QuoteDepositSection
+                editable={editable}
+                form={form}
+                quote={selected}
+                errors={depositTouched && depositCheck ? depositCheck.errors : {}}
+                leadDeposit={leadDeposit}
+                inputCls={inputCls}
+                onChange={(patch) => update(patch)}
+              />
+
               {editable && (
                 <div className="flex flex-col gap-2 mt-5">
                   <button
@@ -740,6 +790,99 @@ export default function QuoteBuilderPage() {
           }}
         />
       )}
+    </div>
+  )
+}
+
+// "Request a deposit" for this quote, next to the summary and Send Quote.
+// The link is this quote's own payment/invoice URL; nothing is filled in from
+// another quote's customer or from shop-wide settings.
+function QuoteDepositSection({ editable, form, quote, errors, leadDeposit, inputCls, onChange }: {
+  editable: boolean
+  form: DraftForm | null
+  quote: Quote
+  errors: Partial<Record<keyof DepositDraft, string>>
+  leadDeposit: LeadDeposit | null
+  inputCls: string
+  onChange: (patch: Partial<DraftForm>) => void
+}) {
+  const existing = leadDeposit && leadDeposit.requested ? leadDeposit : null
+  const existingNote = existing && (
+    <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mt-2">
+      This job already has a deposit request on the lead ({DEPOSIT_STATUS_LABELS[depositStatus(existing)].toLowerCase()}). It's kept as is; this
+      quote's setting won't replace it. Change it from the lead's Production Schedule.
+    </p>
+  )
+
+  if (!editable || !form) {
+    return (
+      <div className="border-t border-zinc-100 pt-3 mt-4 text-sm">
+        <p className="text-xs font-semibold text-zinc-600 flex items-center gap-1.5 mb-1"><Wallet size={13} /> Deposit</p>
+        {quote.deposit_requested ? (
+          <div className="space-y-0.5 text-xs text-zinc-700">
+            <p>Requested after booking{quote.deposit_amount != null ? `: ${formatCurrency(quote.deposit_amount)}` : ''}</p>
+            {quote.deposit_payment_url && <p className="break-all text-zinc-500">{quote.deposit_payment_url}</p>}
+          </div>
+        ) : (
+          <p className="text-xs text-zinc-500">Not requested</p>
+        )}
+        {existingNote}
+      </div>
+    )
+  }
+
+  const d = form.deposit
+  const set = (key: keyof DepositDraft) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+    onChange({ deposit: { ...d, [key]: e.target.value } })
+  const fieldError = (key: keyof DepositDraft) => (errors[key] ? <p className="text-xs text-red-700 mt-1" role="alert">{errors[key]}</p> : null)
+
+  return (
+    <div className="border-t border-zinc-100 pt-3 mt-4">
+      <label className="flex items-start gap-2 text-sm font-medium text-zinc-800">
+        <input
+          type="checkbox"
+          role="switch"
+          aria-checked={form.deposit_requested}
+          checked={form.deposit_requested}
+          onChange={(e) => onChange({ deposit_requested: e.target.checked })}
+          className="mt-0.5"
+        />
+        <span>Request a deposit</span>
+      </label>
+      <p className="text-[11px] text-zinc-500 mt-1">The customer books their date first, then sees this payment link.</p>
+      {form.deposit_requested && (
+        <div className="space-y-3 mt-3">
+          <div>
+            <label className="block text-xs font-semibold text-zinc-600 mb-1">
+              Payment link <span className="font-normal text-zinc-400">(this customer's invoice or payment page, https://)</span>
+            </label>
+            <input
+              type="url"
+              inputMode="url"
+              autoCapitalize="none"
+              spellCheck={false}
+              value={d.payment_url}
+              onChange={set('payment_url')}
+              placeholder="https://"
+              aria-invalid={!!errors.payment_url}
+              className={inputCls}
+            />
+            {fieldError('payment_url')}
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-zinc-600 mb-1">Deposit amount <span className="font-normal text-zinc-400">(optional, USD)</span></label>
+            <input type="text" inputMode="decimal" value={d.amount} onChange={set('amount')} placeholder="150.00" aria-invalid={!!errors.amount} className={inputCls} />
+            {fieldError('amount')}
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-zinc-600 mb-1">Customer instructions <span className="font-normal text-zinc-400">(optional)</span></label>
+            <textarea value={d.instructions} onChange={set('instructions')} rows={2} maxLength={DEPOSIT_INSTRUCTIONS_MAX} className={`${inputCls} resize-none`} />
+            {fieldError('instructions')}
+          </div>
+          <p className="text-[11px] text-zinc-500">Separate from the quote total. SpecPlus doesn't process the payment; mark it received on the lead.</p>
+        </div>
+      )}
+      {existingNote}
     </div>
   )
 }

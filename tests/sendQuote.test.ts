@@ -135,3 +135,39 @@ test('missing email configuration is reported', async () => {
   assert.equal(status, 400)
   assert.equal(emails.length, 0)
 })
+
+// ---------------------------------------------------------------------------
+// The quote's deposit request is checked on the stored quote before any email.
+// ---------------------------------------------------------------------------
+
+function withDeposit(state: MockState, deposit: Record<string, unknown>) {
+  Object.assign(state.tables.quotes[0], deposit)
+  return state
+}
+
+test('a requested deposit without a safe payment link is refused before any email', async () => {
+  for (const url of [null, '', 'http://pay.example.com/inv/1', 'javascript:alert(1)', 'https://user:pass@pay.example.com/x', 'https://pay.example.com/a b']) {
+    emails.length = 0
+    const state = withDeposit(scenario(), { deposit_requested: true, deposit_payment_url: url })
+    const { status, body } = await send()
+    assert.equal(status, 400, String(url))
+    assert.match(body.error, /valid payment link/)
+    assert.equal(emails.length, 0, 'no email is sent')
+    assert.equal(state.rpcCalls.length, 0, 'the quote is not marked sent')
+  }
+})
+
+test('a requested deposit with this quote’s https link sends normally; deposit off sends normally', async () => {
+  const on = withDeposit(scenario(), { deposit_requested: true, deposit_payment_url: 'https://invoices.example.com/inv/1001' })
+  assert.equal((await send()).status, 200)
+  assert.equal(emails.length, 1)
+  assert.deepEqual(on.rpcCalls.map((c) => c.name), ['mark_quote_sent'])
+
+  emails.length = 0
+  const off = withDeposit(scenario(), { deposit_requested: false, deposit_payment_url: null })
+  assert.equal((await send()).status, 200)
+  assert.equal(emails.length, 1)
+  assert.deepEqual(off.rpcCalls.map((c) => c.name), ['mark_quote_sent'])
+  // The payment link is not put in the quote email (it's shown after booking).
+  assert.ok(!emails[0].html.includes('invoices.example.com'))
+})
