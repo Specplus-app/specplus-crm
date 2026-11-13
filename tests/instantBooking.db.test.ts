@@ -835,3 +835,90 @@ test('one link: a sent, unapproved quote is approved, booked and shows the depos
   assert.equal((await ask('What time should I drop it off?')).ok, true)
   assert.deepEqual((await thread()).map((m: any) => m.body), ['Can you match my factory paint?', 'What time should I drop it off?'])
 })
+
+// ---------------------------------------------------------------------------
+// Precedence between an earlier lead setting and the booked quote
+// ---------------------------------------------------------------------------
+
+async function cancelBooking(leadId: string) {
+  const v = await version(leadId)
+  await as(db, staff('userA'), async (tx: any) => tx.query(`SELECT public.cancel_schedule($1, $2, NULL)`, [leadId, v]))
+}
+
+// Lead setting first, THEN the quote is created, set and sent (as reproduced).
+async function leadSettingThenQuote(lead: { requested: boolean; url: string | null; amount: number | null }, quoteDeposit: QuoteDeposit | null) {
+  const leadId = await newLead('shopA')
+  await setLeadDeposit(leadId, lead.requested, lead.url, lead.amount, lead.requested && !lead.url ? 'Old terms' : null)
+  const q = await createQuote(leadId, 'userA', 900)
+  if (quoteDeposit) await setQuoteDeposit(q.id, 'userA', true, quoteDeposit)
+  await sendQuote(q.id, 'userA')
+  assert.equal((await approve(q.public_token)).ok, true)
+  return { leadId, quote: q, token: q.public_token as string }
+}
+
+test('case 1: an older $75 lead setting does not override a quote with the deposit off', async () => {
+  await resetShop()
+  const { leadId, token, quote } = await leadSettingThenQuote({ requested: true, url: 'https://pay.example.com/old-link', amount: 75 }, null)
+  assert.equal((await book(token, D(5))).ok, true)
+  assert.equal(await leadStatus(leadId), 'scheduled')
+  assert.equal((await publicSchedule(token)).deposit, null, 'no old $75 deposit or payment button')
+  const row = await leadDeposit(leadId)
+  assert.deepEqual([row.requested, row.payment_url, row.amount, row.source, row.quote_id], [false, null, null, 'quote', quote.id])
+  assert.ok(row.attached_at, 'now tied to this booking')
+  assert.equal((await events(leadId)).find((e: any) => e.event_type === 'schedule_booked').metadata.deposit_requested, false)
+})
+
+test('case 2: an older "no deposit" lead setting does not hide the quote’s $100 deposit', async () => {
+  await resetShop()
+  const { leadId, token, quote } = await leadSettingThenQuote({ requested: false, url: null, amount: null },
+    { url: 'https://invoices.example.com/inv/Q-100', amount: 100 })
+  assert.equal((await book(token, D(6))).ok, true)
+  const pub = await publicSchedule(token)
+  assert.deepEqual([pub.deposit?.status, pub.deposit?.amount, pub.deposit?.payment_url], ['awaiting', 100, 'https://invoices.example.com/inv/Q-100'])
+  const row = await leadDeposit(leadId)
+  assert.deepEqual([row.requested, row.source, row.quote_id], [true, 'quote', quote.id])
+})
+
+test('a lead correction saved after the quote was sent still applies to the first booking', async () => {
+  await resetShop()
+  const { leadId, token } = await approvedLead('shopA', true, 'Customer', { url: 'https://invoices.example.com/inv/sent', amount: 100 })
+  await new Promise((r) => setTimeout(r, 5)) // a later timestamp than sent_at
+  await setLeadDeposit(leadId, true, 'https://invoices.example.com/inv/corrected', 120, null)
+  await book(token, D(7))
+  const pub = await publicSchedule(token)
+  assert.deepEqual([pub.deposit.amount, pub.deposit.payment_url], [120, 'https://invoices.example.com/inv/corrected'])
+  assert.equal((await leadDeposit(leadId)).source, 'staff')
+})
+
+test('booked and received deposits are never replaced by a re-booking from a newer quote', async () => {
+  await resetShop()
+  // Received on the first booking, then cancelled and re-booked from Quote #2 with the deposit off.
+  const first = await approvedLead('shopA', true, 'Customer', { url: 'https://invoices.example.com/inv/B1', amount: 100 })
+  await book(first.token, D(5))
+  await setReceived(first.leadId, true)
+  const received = await leadDeposit(first.leadId)
+  await cancelBooking(first.leadId)
+  const r2 = await createQuote(first.leadId, 'userA', 950, first.quote.id)
+  await sendQuote(r2.id, 'userA')
+  await approve(r2.public_token)
+  assert.equal((await book(r2.public_token, D(8))).ok, true)
+  const after = await leadDeposit(first.leadId)
+  assert.deepEqual([after.requested, Number(after.amount), after.payment_url, after.received_at?.toString(), after.received_by, after.quote_id],
+    [true, 100, 'https://invoices.example.com/inv/B1', received.received_at?.toString(), received.received_by, first.quote.id])
+  assert.equal((await publicSchedule(r2.public_token)).deposit.status, 'received')
+  await assert.rejects(setLeadDeposit(first.leadId, true, 'https://invoices.example.com/inv/B1', 900, null), /amount can't change/)
+
+  // Unreceived but attached (a deposit requested later on the booked lead): kept on re-booking too.
+  const later = await approvedLead()
+  await book(later.token, D(9))
+  await setLeadDeposit(later.leadId, true, 'https://invoices.example.com/inv/later', 60, null)
+  assert.ok((await leadDeposit(later.leadId)).attached_at, 'a correction on a booked lead is attached')
+  await cancelBooking(later.leadId)
+  const l2 = await createQuote(later.leadId, 'userA', 990, later.quote.id)
+  await setQuoteDeposit(l2.id, 'userA', true, { url: 'https://invoices.example.com/inv/other', amount: 500 })
+  await sendQuote(l2.id, 'userA')
+  await approve(l2.public_token)
+  await book(l2.public_token, D(10))
+  assert.deepEqual([(await publicSchedule(l2.public_token)).deposit.amount, (await publicSchedule(l2.public_token)).deposit.payment_url],
+    [60, 'https://invoices.example.com/inv/later'])
+})

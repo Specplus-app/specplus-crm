@@ -8,7 +8,8 @@ import {
   partNeedsPrice, partsNeedingPrice, customerQuoteUrl, staffPreviewUrl,
 } from '../lib/quotes'
 import {
-  DEPOSIT_INSTRUCTIONS_MAX, DEPOSIT_STATUS_LABELS, depositStatus, draftFromDeposit, validateQuoteDeposit, type DepositDraft, type LeadDeposit,
+  DEPOSIT_INSTRUCTIONS_MAX, DEPOSIT_STATUS_LABELS, depositStatus, draftFromDeposit, quoteDepositEffect, validateQuoteDeposit,
+  type DepositDraft, type LeadDeposit,
 } from '../lib/deposits'
 import QuoteVehiclePhotos from '../components/QuoteVehiclePhotos'
 import QuoteBuildItemEditor from '../components/QuoteBuildItemEditor'
@@ -66,8 +67,9 @@ export default function QuoteBuilderPage() {
   const [addingItem, setAddingItem] = useState(false)
   // Show deposit field errors once the shop tries to save or send.
   const [depositTouched, setDepositTouched] = useState(false)
-  // A deposit already on the lead (set on the lead, or from an earlier
-  // booking) is kept as is; this quote's setting never replaces it.
+  // The lead's deposit record, if any. Whether this quote's choice applies
+  // depends on it (quoteDepositEffect): a deposit tied to a booking or
+  // received is kept; an older, unbooked lead setting is replaced.
   const [leadDeposit, setLeadDeposit] = useState<LeadDeposit | null>(null)
 
   const loadAll = useCallback(async (selectId?: string) => {
@@ -75,7 +77,7 @@ export default function QuoteBuilderPage() {
     const [leadRes, quotesRes, depositRes] = await Promise.all([
       supabase.from('leads').select('*').eq('id', leadId).maybeSingle(),
       supabase.from('quotes').select('*').eq('lead_id', leadId).order('revision_number', { ascending: false }),
-      supabase.from('lead_deposits').select('lead_id, requested, payment_url, amount, instructions, source, received_at, received_by')
+      supabase.from('lead_deposits').select('lead_id, requested, payment_url, amount, instructions, source, received_at, received_by, attached_at, updated_at')
         .eq('lead_id', leadId).maybeSingle(),
     ])
     if (depositRes.error) console.error('Failed to load lead deposit:', depositRes.error.message)
@@ -255,9 +257,13 @@ export default function QuoteBuilderPage() {
       setMessage({ type: 'error', text: 'Fix the deposit details before sending.' })
       return
     }
-    const depositNote = form.deposit_requested
-      ? ' After booking a date, the customer will see this quote\'s deposit payment link.'
-      : ' No deposit will be requested.'
+    const effect = quoteDepositEffect(leadDeposit, selected)
+    const depositNote = effect === 'booking_kept'
+      ? ' This job\'s booking already has a deposit request; it stays as is, and this quote\'s deposit setting won\'t change it.'
+      : (form.deposit_requested
+        ? ' After booking a date, the customer will see this quote\'s deposit payment link.'
+        : ' No deposit will be requested when the customer books.')
+        + (effect === 'quote_replaces' ? ' This replaces the earlier deposit setting on the lead.' : '')
     if (!window.confirm(`Send Quote #${selected.revision_number} to ${lead.customer_email}? Once sent, its pricing and deposit request can no longer be edited.${depositNote}`)) return
 
     setBusy('send')
@@ -806,13 +812,24 @@ function QuoteDepositSection({ editable, form, quote, errors, leadDeposit, input
   inputCls: string
   onChange: (patch: Partial<DraftForm>) => void
 }) {
-  const existing = leadDeposit && leadDeposit.requested ? leadDeposit : null
-  const existingNote = existing && (
-    <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mt-2">
-      This job already has a deposit request on the lead ({DEPOSIT_STATUS_LABELS[depositStatus(existing)].toLowerCase()}). It's kept as is; this
-      quote's setting won't replace it. Change it from the lead's Production Schedule.
-    </p>
+  // What a booking from this quote will actually use.
+  const effect = quoteDepositEffect(leadDeposit, quote)
+  const leadSummary = leadDeposit
+    ? leadDeposit.requested
+      ? `${DEPOSIT_STATUS_LABELS[depositStatus(leadDeposit)].toLowerCase()}${leadDeposit.amount != null ? `, ${formatCurrency(Number(leadDeposit.amount))}` : ''}`
+      : 'no deposit'
+    : ''
+  const note = (text: string) => (
+    <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 mt-2">{text}</p>
   )
+  const existingNote =
+    effect === 'booking_kept'
+      ? note(`This job's booking already has a deposit setting (${leadSummary}). It stays as is; this quote's setting won't change it. Change it from the lead's Production Schedule.`)
+      : effect === 'lead_correction'
+        ? note(`A deposit setting saved on the lead after this quote was sent (${leadSummary}) will apply when the customer books.`)
+        : effect === 'quote_replaces'
+          ? note(`An earlier deposit setting on the lead (${leadSummary}) will be replaced by this quote's choice when the customer books.`)
+          : null
 
   if (!editable || !form) {
     return (

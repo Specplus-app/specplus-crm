@@ -23,12 +23,25 @@ What changes
     approved revision), source 'quote', with its quote_id. There is no
     fallback to the shop-wide defaults: a quote with the deposit off books
     with no deposit request and no payment button.
-  - An existing lead_deposits row always wins and is never rewritten by a
-    booking or a revision: deposits set on the lead (before or after
-    booking), earlier bookings' deposits, received deposits and their history
-    are kept. Staff can still correct an outstanding link or request a
-    deposit later on the lead (set_lead_deposit, unchanged, including the
-    received-amount lock).
+  - Precedence at booking (deposit_snapshot_for_booking), in order:
+      1. A lead deposit attached to a booking (lead_deposits.attached_at,
+         set when a booking takes it or when staff edit it while a booking
+         is active), a received deposit, or any deposit when the lead has
+         been booked before: kept as is, never rewritten by a booking or a
+         revision. Receipt history and the received-amount lock are
+         unchanged (set_lead_deposit is not modified).
+      2. First booking, with an unattached lead setting saved AFTER the
+         booked quote was sent: an intentional correction for this quote;
+         it is kept and attached.
+      3. Otherwise the booked quote's explicit choice applies: deposit on
+         copies its link, amount and instructions; deposit off means no
+         deposit request. An older, unbooked, unreceived lead setting (from
+         before the quote was sent) is replaced by that choice.
+    Existing rows are backfilled as attached when they came from a booking
+    (shop defaults), were received, or belong to a lead that has had a
+    booking, so nothing already on TEST changes meaning.
+  - Staff can still correct an outstanding link or request a deposit later
+    on the lead after booking; those rows are attached and kept.
   - The snapshot still runs in its own subtransaction: a problem is logged
     and skipped and never undoes or blocks the booking.
   - Shop-wide deposit defaults are retired: set_shop_deposit_settings is no
@@ -120,36 +133,101 @@ ALTER TABLE public.lead_deposits DROP CONSTRAINT IF EXISTS lead_deposits_source_
 ALTER TABLE public.lead_deposits ADD CONSTRAINT lead_deposits_source_check
   CHECK (source IN ('shop_default', 'staff', 'quote'));
 
--- Copies the booked quote's deposit request to the lead, unless the lead
--- already has deposit details (those always win and are never rewritten).
+-- Whether a lead's deposit is tied to a booking (taken by one, or edited by
+-- staff while one is active). Attached deposits are never replaced by a
+-- later booking or revision.
+ALTER TABLE public.lead_deposits
+  ADD COLUMN IF NOT EXISTS attached_at timestamptz;
+
+-- Existing rows keep their meaning: anything that came from a booking, was
+-- received, or belongs to a lead that has had a booking stays as is.
+UPDATE public.lead_deposits d SET attached_at = d.created_at
+WHERE d.attached_at IS NULL
+  AND (d.source = 'shop_default' OR d.received_at IS NOT NULL
+       OR EXISTS (SELECT 1 FROM public.schedule_reservations r WHERE r.lead_id = d.lead_id));
+
+-- Staff edits while a booking is active (correcting an outstanding link,
+-- requesting a deposit later) attach the deposit to that booking.
+CREATE OR REPLACE FUNCTION public.lead_deposits_attach()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+BEGIN
+  IF TG_OP = 'UPDATE' AND OLD.attached_at IS NOT NULL THEN
+    NEW.attached_at := OLD.attached_at; -- never detached
+  ELSIF NEW.attached_at IS NULL AND EXISTS (
+    SELECT 1 FROM public.schedule_reservations r WHERE r.lead_id = NEW.lead_id AND r.status = 'active'
+  ) THEN
+    NEW.attached_at := now();
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS lead_deposits_attach ON public.lead_deposits;
+CREATE TRIGGER lead_deposits_attach
+  BEFORE INSERT OR UPDATE ON public.lead_deposits
+  FOR EACH ROW EXECUTE FUNCTION public.lead_deposits_attach();
+
+REVOKE ALL ON FUNCTION public.lead_deposits_attach() FROM PUBLIC, anon, authenticated;
+
+-- Decides the deposit for a booking that was just created (the reservation
+-- row already exists). Precedence (see the header):
+--   1. attached, received, or not the lead's first booking: keep the row;
+--   2. first booking, lead setting saved after the booked quote was sent:
+--      keep it (an intentional correction) and attach it;
+--   3. otherwise the booked quote's explicit choice, replacing any older,
+--      unbooked, unreceived lead setting.
 -- No shop-wide fallback. Never raises: a problem is logged and the booking
--- goes ahead without a deposit request.
+-- goes ahead without changing the deposit.
 CREATE OR REPLACE FUNCTION public.deposit_snapshot_for_booking(p_lead_id uuid, p_shop_id uuid)
 RETURNS boolean
 LANGUAGE plpgsql
 SET search_path = ''
 AS $$
 DECLARE
+  v_row public.lead_deposits%ROWTYPE;
+  v_has_row boolean;
+  v_first_booking boolean;
   v_quote public.quotes%ROWTYPE;
+  v_quote_ok boolean;
   v_requested boolean := false;
 BEGIN
   BEGIN
-    IF EXISTS (SELECT 1 FROM public.lead_deposits d WHERE d.lead_id = p_lead_id) THEN
-      SELECT d.requested INTO v_requested FROM public.lead_deposits d WHERE d.lead_id = p_lead_id;
-      RETURN v_requested;
+    SELECT * INTO v_row FROM public.lead_deposits d WHERE d.lead_id = p_lead_id FOR UPDATE;
+    v_has_row := FOUND;
+    v_first_booking := (SELECT count(*) FROM public.schedule_reservations r WHERE r.lead_id = p_lead_id) <= 1;
+
+    IF v_has_row AND (v_row.attached_at IS NOT NULL OR v_row.received_at IS NOT NULL OR NOT v_first_booking) THEN
+      RETURN v_row.requested;
     END IF;
+
     v_quote := public.schedule_current_quote(p_lead_id);
-    IF v_quote.id IS NOT NULL AND v_quote.status = 'approved' AND v_quote.shop_id = p_shop_id
-       AND v_quote.deposit_requested AND public.deposit_url_is_safe(v_quote.deposit_payment_url) THEN
-      INSERT INTO public.lead_deposits (lead_id, shop_id, requested, payment_url, amount, instructions, source, quote_id)
+    v_quote_ok := v_quote.id IS NOT NULL AND v_quote.status = 'approved' AND v_quote.shop_id = p_shop_id;
+
+    IF v_has_row AND (NOT v_quote_ok OR v_quote.sent_at IS NULL OR v_row.updated_at > v_quote.sent_at) THEN
+      UPDATE public.lead_deposits SET attached_at = now() WHERE lead_id = p_lead_id;
+      RETURN v_row.requested;
+    END IF;
+
+    v_requested := v_quote_ok AND v_quote.deposit_requested AND public.deposit_url_is_safe(v_quote.deposit_payment_url);
+    IF v_has_row THEN
+      UPDATE public.lead_deposits SET requested = v_requested,
+        payment_url = CASE WHEN v_requested THEN v_quote.deposit_payment_url END,
+        amount = CASE WHEN v_requested THEN v_quote.deposit_amount END,
+        instructions = CASE WHEN v_requested THEN v_quote.deposit_instructions END,
+        source = 'quote', quote_id = v_quote.id, attached_at = now(), updated_by = NULL, updated_at = now()
+      WHERE lead_id = p_lead_id;
+    ELSIF v_requested THEN
+      INSERT INTO public.lead_deposits (lead_id, shop_id, requested, payment_url, amount, instructions, source, quote_id, attached_at)
       VALUES (p_lead_id, p_shop_id, true, v_quote.deposit_payment_url, v_quote.deposit_amount, v_quote.deposit_instructions,
-        'quote', v_quote.id);
-      v_requested := true;
+        'quote', v_quote.id, now());
     END IF;
     RETURN v_requested;
   EXCEPTION WHEN OTHERS THEN
     RAISE WARNING 'Deposit snapshot skipped for lead %: % (%)', p_lead_id, SQLERRM, SQLSTATE;
-    RETURN false;
+    RETURN coalesce((SELECT d.requested FROM public.lead_deposits d WHERE d.lead_id = p_lead_id), false);
   END;
 END;
 $$;

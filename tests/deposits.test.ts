@@ -3,7 +3,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  QUOTE_DEPOSIT_LINK_REQUIRED, depositStatus, draftFromDeposit, isSafePaymentUrl, parseDepositAmount, validateDepositDraft, validateQuoteDeposit,
+  QUOTE_DEPOSIT_LINK_REQUIRED, depositStatus, draftFromDeposit, isSafePaymentUrl, parseDepositAmount, quoteDepositEffect, validateDepositDraft,
+  validateQuoteDeposit,
 } from '../src/lib/deposits.ts'
 
 test('only safe https payment links are accepted, matching the server rule', () => {
@@ -70,4 +71,19 @@ test('quote deposit on needs this quote’s https link; amount and instructions 
 test('reopening a draft restores its saved deposit fields', () => {
   assert.deepEqual(draftFromDeposit({ payment_url: 'https://invoices.example.com/inv/7', amount: 150, instructions: 'Thanks' }),
     { payment_url: 'https://invoices.example.com/inv/7', amount: '150.00', instructions: 'Thanks' })
+})
+
+test('the quote screen describes which deposit a booking will actually use', () => {
+  const draft = { status: 'draft', sent_at: null }
+  const sent = { status: 'sent', sent_at: '2026-11-10T12:00:00Z' }
+  assert.equal(quoteDepositEffect(null, draft), 'quote')
+  // Older, unbooked, unreceived lead settings (either "$75" or "no deposit") are replaced by the quote.
+  const older = { attached_at: null, received_at: null, updated_at: '2026-11-09T12:00:00Z' }
+  assert.equal(quoteDepositEffect(older, draft), 'quote_replaces')
+  assert.equal(quoteDepositEffect(older, sent), 'quote_replaces')
+  // A lead correction saved after the quote was sent applies.
+  assert.equal(quoteDepositEffect({ ...older, updated_at: '2026-11-11T08:00:00Z' }, sent), 'lead_correction')
+  // Tied to a booking, or received: kept.
+  assert.equal(quoteDepositEffect({ ...older, attached_at: '2026-11-11T08:00:00Z' }, draft), 'booking_kept')
+  assert.equal(quoteDepositEffect({ ...older, received_at: '2026-11-11T08:00:00Z' }, sent), 'booking_kept')
 })

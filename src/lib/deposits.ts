@@ -26,6 +26,9 @@ export type LeadDeposit = {
   source: 'shop_default' | 'staff' | 'quote'
   received_at: string | null
   received_by: string | null
+  // Set once the deposit is tied to a booking (never replaced afterwards).
+  attached_at?: string | null
+  updated_at?: string
 }
 
 // What the customer's quote link shows after booking.
@@ -114,4 +117,27 @@ export function validateQuoteDeposit(requested: boolean, draft: DepositDraft): {
     errors,
     values: { deposit_requested: true, deposit_payment_url: values.payment_url, deposit_amount: values.amount, deposit_instructions: values.instructions },
   }
+}
+
+// Which deposit a booking from this quote will actually use, mirroring
+// deposit_snapshot_for_booking (20261113120000_add_quote_deposit_requests.sql):
+//   'booking_kept'     - the lead's deposit is tied to a booking or received:
+//                        kept as is; this quote's setting doesn't change it.
+//   'lead_correction'  - a lead setting saved after this quote was sent:
+//                        it applies to the first booking.
+//   'quote_replaces'   - an older, unbooked lead setting: this quote's choice
+//                        replaces it when the customer books.
+//   'quote'            - no lead setting: this quote's choice applies.
+export type QuoteDepositEffect = 'booking_kept' | 'lead_correction' | 'quote_replaces' | 'quote'
+
+export function quoteDepositEffect(
+  leadDeposit: Pick<LeadDeposit, 'received_at' | 'attached_at' | 'updated_at'> | null | undefined,
+  quote: { status: string; sent_at: string | null },
+): QuoteDepositEffect {
+  if (!leadDeposit) return 'quote'
+  if (leadDeposit.attached_at || leadDeposit.received_at) return 'booking_kept'
+  if (quote.status !== 'draft' && quote.sent_at && leadDeposit.updated_at && Date.parse(leadDeposit.updated_at) > Date.parse(quote.sent_at)) {
+    return 'lead_correction'
+  }
+  return 'quote_replaces'
 }
