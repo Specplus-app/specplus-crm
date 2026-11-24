@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import { supabase, PublicQuote, PublicQuoteMessage, PartEntry, formatCurrency, formatDateTime, getHighlightColor } from '../lib/supabase'
 import { MESSAGE_MAX_LENGTH, formatQuoteDate, lineItemTotal, quoteViewSessionId } from '../lib/quotes'
 import QuoteVehiclePhotos from '../components/QuoteVehiclePhotos'
+import { useCustomerPhotos } from '../lib/customerPhotos'
 import CustomerSchedule from '../components/CustomerSchedule'
 import { AlertCircle, CheckCircle2, Clock, Eye, FileText, Loader2, MessageSquare, Package, Palette, Phone, RefreshCw, Send, XCircle } from 'lucide-react'
 
@@ -42,6 +43,11 @@ export default function CustomerQuotePage() {
   const [justApproved, setJustApproved] = useState(false)
 
   const validToken = !!token && UUID_RE.test(token)
+  // Customer photos are private; the token unlocks only this quote's photos.
+  const photoUrl = useCustomerPhotos(
+    [quote?.front_image_url, quote?.rear_image_url],
+    quote && token && validToken ? { mode: 'quote', token } : null,
+  )
 
   const loadQuote = useCallback(async () => {
     if (!token || !UUID_RE.test(token)) {
@@ -275,9 +281,9 @@ export default function CustomerQuotePage() {
         {/* Quote details stay available below. */}
 
         {/* Visual */}
-        {(quote.front_image_url || quote.rear_image_url) && (
+        {(photoUrl(quote.front_image_url) || photoUrl(quote.rear_image_url)) && (
           <div className="mb-5">
-            <QuoteVehiclePhotos parts={parts} frontUrl={quote.front_image_url} rearUrl={quote.rear_image_url} theme="dark" />
+            <QuoteVehiclePhotos parts={parts} frontUrl={photoUrl(quote.front_image_url)} rearUrl={photoUrl(quote.rear_image_url)} theme="dark" />
           </div>
         )}
 

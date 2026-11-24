@@ -1,11 +1,7 @@
 import { useState } from 'react'
-import { PartEntry, ShipSize, SHIP_SIZES, formatCurrency, supabase } from '../lib/supabase'
+import { PartEntry, ShipSize, SHIP_SIZES, formatCurrency } from '../lib/supabase'
+import { STAFF_PHOTO_ACCESS, useCustomerPhotos } from '../lib/customerPhotos'
 import { X, DollarSign, Truck, Clock, Image as ImageIcon, Save } from 'lucide-react'
-
-function customUploadUrl(path: string | null | undefined): string | null {
-  if (!path) return null
-  return supabase.storage.from('customer-uploads').getPublicUrl(path).data.publicUrl
-}
 
 export default function ShopCustomPricingModal({
   item, onClose, onSave,
@@ -25,7 +21,8 @@ export default function ShopCustomPricingModal({
   const paintPriceNum = Math.max(0, parseFloat(paintPrice) || 0)
   const leadTimeNum = Math.max(0, Math.round(parseFloat(leadTimeDays) || 0))
   const linePrice = type === 'new' ? partCostNum + paintPriceNum : paintPriceNum
-  const refUrl = customUploadUrl(item.reference_image_path)
+  const photoUrl = useCustomerPhotos([item.reference_image_path], STAFF_PHOTO_ACCESS)
+  const refUrl = photoUrl(item.reference_image_path)
 
   const handleSave = () => {
     onSave({

@@ -13,6 +13,7 @@ import {
 } from '../lib/deposits'
 import QuoteVehiclePhotos from '../components/QuoteVehiclePhotos'
 import QuoteBuildItemEditor from '../components/QuoteBuildItemEditor'
+import { STAFF_PHOTO_ACCESS, useCustomerPhotos } from '../lib/customerPhotos'
 import {
   AlertCircle, ArrowLeft, Check, Copy, ExternalLink, FileText, Loader2, Lock, Plus, RefreshCw, Save, Send, Trash2, Wallet,
 } from 'lucide-react'
@@ -101,6 +102,8 @@ export default function QuoteBuilderPage() {
 
   const selected = quotes.find((q) => q.id === selectedId) ?? null
   const latest = quotes[0] ?? null
+  // Customer photos are private: staff see signed URLs for their shop only.
+  const photoUrl = useCustomerPhotos([selected?.front_image_url, selected?.rear_image_url], STAFF_PHOTO_ACCESS)
   // Custom and preconfigured leads share this quote workflow. Only custom-build
   // areas can arrive unpriced; preconfigured parts carry configured prices.
   const isCustom = !!lead?.is_custom
@@ -463,7 +466,7 @@ export default function QuoteBuilderPage() {
             {(selected.front_image_url || selected.rear_image_url) && (
               <div className="bg-white rounded-2xl border border-zinc-200 p-6">
                 <h2 className="text-sm font-semibold text-zinc-900 mb-3">Customer's Build</h2>
-                <QuoteVehiclePhotos parts={parts} frontUrl={selected.front_image_url} rearUrl={selected.rear_image_url} theme="light" />
+                <QuoteVehiclePhotos parts={parts} frontUrl={photoUrl(selected.front_image_url)} rearUrl={photoUrl(selected.rear_image_url)} theme="light" />
               </div>
             )}
 
@@ -786,8 +789,8 @@ export default function QuoteBuilderPage() {
 
       {addingItem && editable && (
         <QuoteBuildItemEditor
-          frontUrl={selected.front_image_url}
-          rearUrl={selected.rear_image_url}
+          frontUrl={photoUrl(selected.front_image_url)}
+          rearUrl={photoUrl(selected.rear_image_url)}
           existingParts={form!.selected_parts}
           onCancel={() => setAddingItem(false)}
           onAdd={(part) => {

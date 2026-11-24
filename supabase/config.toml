@@ -24,3 +24,9 @@ verify_jwt = true
 # recipients or content; it only drains the notification queue.
 [functions.notification-dispatch]
 verify_jwt = false
+
+# Customers open quote and build-sheet links without signing in. The quote or
+# share token in the body is the authorization; the database decides which
+# photo paths it may see (customer_photo_paths, service_role only).
+[functions.customer-photos]
+verify_jwt = false

@@ -89,8 +89,10 @@ export function quoteViewSessionId(token: string): string {
 // Creating quotes
 // ---------------------------------------------------------------------------
 
-const customUploadUrl = (path: string | null): string | null =>
-  path ? supabase.storage.from('customer-uploads').getPublicUrl(path).data.publicUrl : null
+// Customer uploads are private, so a quote stores the object path, never a
+// public URL; viewers resolve it to a signed URL (see lib/customerPhotos).
+// Older quotes hold public-URL-shaped values, which resolve the same way.
+const customUploadUrl = (path: string | null): string | null => path || null
 
 const vehicleImageUrl = (path: string | null): string | null =>
   path ? supabase.storage.from('vehicles').getPublicUrl(path).data.publicUrl : null

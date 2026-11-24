@@ -1,13 +1,12 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { supabase, Shop, CustomPartBox } from '../lib/supabase'
+import { CUSTOMER_UPLOADS_BUCKET, customerUploadError, customerUploadObjectName, customerUploadRef, newUploadKey } from '../lib/customerPhotos'
 import {
   Shield, ArrowLeft, ArrowRight, Upload, X, Plus, Send, User, Mail, Phone, MapPin, Calendar,
   Palette, Image as ImageIcon, AlertCircle, CheckCircle2, Trash2, Pencil, Car, Hash, Minus, RotateCcw,
 } from 'lucide-react'
 
-const BUCKET = 'customer-uploads'
 const US_STATES = ['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY']
-const MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 type CustomItem = {
   id: string
@@ -18,16 +17,29 @@ type CustomItem = {
   box: CustomPartBox
 }
 
-function publicUrl(path: string | null): string | null {
-  if (!path) return null
-  return supabase.storage.from(BUCKET).getPublicUrl(path).data.publicUrl
+// The bucket is private: visitors cannot read uploads back, so the flow
+// previews each file it uploaded from a local object URL.
+const localPreviews = new Map<string, string>()
+
+function previewUrl(path: string | null): string | null {
+  return path ? localPreviews.get(path) ?? null : null
 }
 
-async function uploadImage(shopId: string, file: File): Promise<string | null> {
-  const ext = (file.name.split('.').pop() || 'jpg').toLowerCase()
-  const path = `${shopId}/${crypto.randomUUID()}.${ext}`
-  const { error } = await supabase.storage.from(BUCKET).upload(path, file, { upsert: false })
+// One upload session per custom request: its photos go under the session's
+// upload ref, and the request is submitted with the key that proves ownership.
+type UploadSession = { key: string; ref: Promise<string> }
+
+function newUploadSession(): UploadSession {
+  const key = newUploadKey()
+  return { key, ref: customerUploadRef(key) }
+}
+
+async function uploadImage(shopId: string, session: UploadSession, file: File): Promise<string | null> {
+  const path = customerUploadObjectName(shopId, await session.ref, file)
+  if (!path) return null
+  const { error } = await supabase.storage.from(CUSTOMER_UPLOADS_BUCKET).upload(path, file, { upsert: false, contentType: file.type })
   if (error) return null
+  localPreviews.set(path, URL.createObjectURL(file))
   return path
 }
 
@@ -40,6 +52,7 @@ export default function CustomBuildFlow({
   initialPaintCode: string
   onBack: () => void
 }) {
+  const [uploadSession] = useState(newUploadSession)
   const [frontPath, setFrontPath] = useState<string | null>(null)
   const [rearPath, setRearPath] = useState<string | null>(null)
   const [uploadingView, setUploadingView] = useState<'front' | 'rear' | null>(null)
@@ -82,7 +95,7 @@ export default function CustomBuildFlow({
   const [vehicleTrim, setVehicleTrim] = useState('')
 
   const activePath = activeView === 'front' ? frontPath : rearPath
-  const activeUrl = publicUrl(activePath)
+  const activeUrl = previewUrl(activePath)
   const viewItems = items.filter((it) => it.box.view === activeView)
 
   const clampPan = (x: number, y: number, z: number) => {
@@ -136,10 +149,10 @@ export default function CustomBuildFlow({
   const handleUpload = async (view: 'front' | 'rear', file: File | undefined) => {
     if (!file) return
     setUploadError(null)
-    if (!file.type.startsWith('image/')) { setUploadError('Please choose an image file.'); return }
-    if (file.size > MAX_UPLOAD_BYTES) { setUploadError('Image is too large (max 10MB).'); return }
+    const invalid = customerUploadError(file)
+    if (invalid) { setUploadError(invalid); return }
     setUploadingView(view)
-    const path = await uploadImage(shopId, file)
+    const path = await uploadImage(shopId, uploadSession, file)
     setUploadingView(null)
     if (!path) { setUploadError('Upload failed. Please try again.'); return }
     if (view === 'front') { setFrontPath(path); setActiveView('front') }
@@ -297,6 +310,8 @@ export default function CustomBuildFlow({
       grand_total: 0,
       estimated_lead_time_days: 0,
       status: 'new',
+      // Proves this request owns the photos above; the database keeps only its hash.
+      upload_key: uploadSession.key,
     })
     setSubmitting(false)
     if (error) setSubmitError('Failed to submit. Please try again.')
@@ -390,7 +405,7 @@ export default function CustomBuildFlow({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
           {(['front', 'rear'] as const).map((view) => {
             const path = view === 'front' ? frontPath : rearPath
-            const url = publicUrl(path)
+            const url = previewUrl(path)
             return (
               <div key={view} className="bg-obsidian-900/60 backdrop-blur-xl border border-white/10 border-t-white/20 shadow-glass-card rounded-2xl overflow-hidden">
                 <div className="px-4 py-2.5 border-b border-white/10 flex items-center justify-between">
@@ -398,7 +413,7 @@ export default function CustomBuildFlow({
                   {url && (
                     <label className="text-xs text-cobalt-400 hover:text-cobalt-300 cursor-pointer">
                       Replace
-                      <input type="file" accept="image/*" className="hidden"
+                      <input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" className="hidden"
                         onChange={(e) => handleUpload(view, e.target.files?.[0])} />
                     </label>
                   )}
@@ -416,7 +431,7 @@ export default function CustomBuildFlow({
                         <span className="text-xs text-slate-600 mt-0.5">{view === 'front' ? 'Required' : 'Optional'}</span>
                       </>
                     )}
-                    <input type="file" accept="image/*" className="hidden"
+                    <input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" className="hidden"
                       onChange={(e) => handleUpload(view, e.target.files?.[0])} />
                   </label>
                 )}
@@ -662,7 +677,7 @@ export default function CustomBuildFlow({
                     </div>
                     {it.notes && <p className="text-xs text-slate-400 mt-1">{it.notes}</p>}
                     {it.reference_image_path && (
-                      <a href={publicUrl(it.reference_image_path)!} target="_blank" rel="noreferrer"
+                      <a href={previewUrl(it.reference_image_path)!} target="_blank" rel="noreferrer"
                         className="inline-flex items-center gap-1 text-xs text-cobalt-400 hover:text-cobalt-300 mt-1">
                         <ImageIcon size={12} /> Reference photo
                       </a>
@@ -695,6 +710,7 @@ export default function CustomBuildFlow({
       {(pendingBox || editingItem) && (
         <CustomPartModal
           shopId={shopId}
+          uploadSession={uploadSession}
           initial={editingItem}
           onCancel={() => { setPendingBox(null); setEditingItem(null) }}
           onConfirm={addItem}
@@ -720,9 +736,10 @@ export default function CustomBuildFlow({
 }
 
 function CustomPartModal({
-  shopId, initial, onCancel, onConfirm,
+  shopId, uploadSession, initial, onCancel, onConfirm,
 }: {
   shopId: string
+  uploadSession: UploadSession
   initial: CustomItem | null
   onCancel: () => void
   onConfirm: (v: { name: string; type: 'new' | 'send'; notes: string; reference_image_path: string | null }) => void
@@ -737,16 +754,16 @@ function CustomPartModal({
   const handleRef = async (file: File | undefined) => {
     if (!file) return
     setError(null)
-    if (!file.type.startsWith('image/')) { setError('Please choose an image file.'); return }
-    if (file.size > MAX_UPLOAD_BYTES) { setError('Image is too large (max 10MB).'); return }
+    const invalid = customerUploadError(file)
+    if (invalid) { setError(invalid); return }
     setUploading(true)
-    const path = await uploadImage(shopId, file)
+    const path = await uploadImage(shopId, uploadSession, file)
     setUploading(false)
     if (!path) { setError('Upload failed. Please try again.'); return }
     setRefPath(path)
   }
 
-  const refUrl = publicUrl(refPath)
+  const refUrl = previewUrl(refPath)
 
   return (
     <div className="dark-surface fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={onCancel}>
@@ -810,7 +827,7 @@ function CustomPartModal({
                     <span className="text-xs text-slate-400">Add a reference photo</span>
                   </>
                 )}
-                <input type="file" accept="image/*" className="hidden" onChange={(e) => handleRef(e.target.files?.[0])} />
+                <input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" className="hidden" onChange={(e) => handleRef(e.target.files?.[0])} />
               </label>
             )}
           </div>
