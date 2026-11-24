@@ -101,25 +101,31 @@ quote link. This migration binds every photo a customer can see to one request.
   only if it belongs to the record's own lead, which must be in the same shop.
   That means either:
   - a keyed path whose ref equals the lead's `upload_ref`, or
-  - a legacy path claimed by that lead.
+  - a legacy path that a staff member explicitly shared with that lead.
 
   Build sheets with no linked lead show no customer photos.
-- **Existing (legacy) photos** `<shop id>/<uuid>.<ext>`, recorded in
-  `legacy_customer_photo_claims` by `backfill_legacy_customer_photo_claims()`
-  (service_role only, runs once in the migration):
-  - A legacy photo is claimed by a lead only if it is in that lead's shop
-    folder, **exactly one** lead references it, and the object was uploaded
-    within **24 hours before** that lead was submitted.
-  - Everything else is **staff-only**: the shop's staff still see it on the lead
-    and quote pages (shop-folder Storage policy), but customer links do not
-    show it. This covers photos referenced by several requests (possible
-    hijacks), photos uploaded after the request, and long-orphaned uploads.
-  - Re-running the backfill is idempotent. A photo that has since become
-    ambiguous loses its claim.
+- **Existing (legacy) photos** `<shop id>/<uuid>.<ext>` are **staff-only**.
+  - There is **no automatic matching**: not by upload time, and not by "only one
+    request references it". While every path was listable, someone else could
+    have arranged either signal, so neither proves ownership. The migration
+    shares nothing.
+  - The shop's staff and admins still see every legacy photo on the lead and
+    quote pages (shop-folder Storage policy). Customer links do not show them.
+  - A staff member can **explicitly share** one legacy photo with one request's
+    customer after verifying it (section 4a):
+    - `share_legacy_customer_photo(lead, path)`;
+    - `unshare_legacy_customer_photo(lead, path)` to undo.
+  - Shares are recorded in `legacy_customer_photo_shares` with who shared and
+    when. Staff of the shop can read that table; nobody can write it directly.
+  - A share works only for a legacy photo that the request itself references,
+    in its own shop, and that exists in Storage. Sharing with one request never
+    exposes the photo to any other request.
+  - `lead_legacy_photos(lead)` lists a lead's legacy photos, whether each is
+    shared, and how many **other** requests reference it.
 - **Uploads during rollout.** The two-level legacy layout is still accepted
   for anonymous uploads, so the currently deployed frontend keeps working
-  between steps 1 and 3. Those photos are staff-only until the backfill re-run
-  in step 4 claims them under the same rules. Remove the legacy layout from
+  between steps 1 and 3. Those photos are staff-only like any legacy photo, and
+  staff can share them explicitly. Remove the legacy layout from
   `customer_upload_path_allowed()` in the phase-2 PR.
 
 ### Staged: `supabase/rollout/20261124130000_make_customer_uploads_private.sql` (phase 2)
@@ -153,6 +159,11 @@ caller. Unknown tokens get an empty result.
 - `/build/:token` uses `get_shared_build_sheet`. Legacy uuid links show a
   "no longer active" message.
 - Lead page: new **Build sheet link** card (`BuildSheetShareControl`).
+- Lead page: new **Older customer photos** panel (`LegacyPhotoSharing`) on custom
+  requests that have legacy photos:
+  - each photo is marked *Staff only* or *Shown to customer*;
+  - a warning appears when other requests reference the same photo;
+  - *Show to customer* asks for confirmation; *Stop showing* undoes it.
 
 ## 4. Rollout order (TEST first, then production)
 
@@ -164,8 +175,7 @@ Each step is a manual action by someone with access. None was performed here.
    authenticated SELECT must be dropped in step 1, or the bucket stays
    listable. Record the current `storage.buckets` row for `customer-uploads`.
 1. **Apply phase 1 and the binding migration** (`20261124120000_customer_data_privacy.sql`,
-   then `20261125120000_bind_customer_photos_to_requests.sql`). Record the
-   backfill result the migration returns (`added`/`removed`). This is
+   then `20261125120000_bind_customer_photos_to_requests.sql`). This is
    compatible with the current frontend:
    - Anon listing of sheets and photos stops.
    - Old `/build/` links stop working (intended).
@@ -176,11 +186,9 @@ Each step is a manual action by someone with access. None was performed here.
 2. **Deploy the `customer-photos` Edge Function** with `verify_jwt = false`
    (from `supabase/config.toml`).
 3. **Deploy the frontend** (merge the reviewed PR; Vercel deploys `main`).
-4. **Re-run the legacy backfill** once, so requests submitted by the old
-   frontend between steps 1 and 3 are claimed under the same rules:
-   `SELECT public.backfill_legacy_customer_photo_claims();` as service_role,
-   for example from the SQL editor. Then **verify on the environment** (see
-   section 5) while the bucket is still public.
+4. **Verify on the environment** (see section 5) while the bucket is still public.
+   From this step on, customer links stop showing legacy photos. Tell shops
+   about the *Older customer photos* panel (step 7).
 5. **Phase 2:** move `supabase/rollout/20261124130000_make_customer_uploads_private.sql`
    into `supabase/migrations/` in a follow-up PR, then apply it. In the same
    PR, stop accepting the legacy two-level upload layout.
@@ -189,8 +197,36 @@ Each step is a manual action by someone with access. None was performed here.
    - Staff lead and quote pages show photos.
    - A customer quote with custom photos shows them.
    - A shared build sheet shows its photos.
-7. **Notify shops** about retired build-sheet links and the new Build sheet link
-   card. Shops contact customers; nothing is sent automatically.
+7. **Notify shops** about retired build-sheet links, the new Build sheet link
+   card, and that older photos are now staff-only, with the re-share
+   procedure in section 4a. Shops contact customers; nothing is sent
+   automatically.
+
+### 4a. Verifying and re-sharing a legacy photo (staff procedure)
+
+Use this only when a customer needs to see an older photo on their quote or
+build-sheet link.
+
+1. Open the request in the dashboard. The *Older customer photos* panel shows
+   the request's legacy photos; open a photo to view it.
+2. Check the warning. *Also on N other requests* means the same photo is
+   attached to another request. Treat that as a possible mix-up or misuse,
+   and do not share it unless the next step settles it.
+3. Confirm with the customer through a channel you already trust: call the
+   phone number on the request, or ask them to reply from the email address on
+   the request and describe the photo (vehicle, color, angle). Do not rely on a
+   link, a photo path, or an email from a different address.
+4. If they confirm, click **Show to customer** and accept the prompt. Only that
+   photo becomes visible, and only on links for this request. The share is
+   recorded with your user and the time.
+5. If in doubt, leave it staff-only. Alternatively, ask the customer to submit
+   a new request with fresh photos; new uploads are bound to their request
+   automatically.
+6. To undo, click **Stop showing**. Customer links stop showing the photo once
+   their signed URL expires, within an hour.
+
+Admins can audit shares with
+`SELECT * FROM legacy_customer_photo_shares ORDER BY shared_at DESC`.
 
 ### Rollback (never reopens broad public access)
 
@@ -230,8 +266,11 @@ Each step is a manual action by someone with access. None was performed here.
   references A's photo paths.
 - The new lead row has `upload_ref` set and `upload_key` empty, and its photos
   sit under `<shop>/<upload_ref>/`.
-- A quote for a lead submitted before the migration shows its photos if the
-  backfill claimed them. Otherwise, staff still see them on the lead page.
+- A quote for a lead submitted before the migration shows **no** legacy photos
+  to the customer. Staff still see them on the lead page, in the *Older
+  customer photos* panel.
+- After *Show to customer* on one legacy photo, the customer link shows exactly
+  that photo. *Stop showing* removes it again.
 - Preconfigured quote: vehicle template images still load publicly.
 - Shop logos still load.
 

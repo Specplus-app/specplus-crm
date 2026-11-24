@@ -427,28 +427,21 @@ test('customer photo access is scoped to the token\'s own record and shop', asyn
   assert.deepEqual(await photoPaths('build_sheet', await shareLink(user('a1'), orphan.id)), [])
 })
 
-test('only the server can resolve photo paths or re-run the legacy backfill', async () => {
+test('only the server can resolve photo paths for a token', async () => {
   for (const who of [anon, user('a1'), user('admin')]) {
     await assert.rejects(
       as(db, who, (tx: any) => tx.query(`SELECT public.customer_photo_paths('quote', $1)`, [uuid()])),
-      /permission denied/i,
-    )
-    await assert.rejects(
-      as(db, who, (tx: any) => tx.query(`SELECT public.backfill_legacy_customer_photo_claims()`)),
-      /permission denied/i,
-    )
-    await assert.rejects(
-      as(db, who, (tx: any) => tx.query(`SELECT * FROM legacy_customer_photo_claims`)),
       /permission denied/i,
     )
   }
 })
 
 // ---------------------------------------------------------------------------
-// Legacy photos (uploaded before request binding)
+// Legacy photos (uploaded before request binding): staff-only by default
 // ---------------------------------------------------------------------------
 
-test('legacy photos: unambiguous ones stay visible to their customer; others become staff-only', async () => {
+// A legacy database with requests submitted before the binding migration.
+async function legacyFixture() {
   const pre = await createDb({ before: BINDING })
   const store: Record<string, string> = {}
   await seed(pre, store)
@@ -460,55 +453,126 @@ test('legacy photos: unambiguous ones stay visible to their customer; others bec
         parts_total, shipping_total, grand_total, estimated_lead_time_days, status, is_custom, front_image_url, rear_image_url, submitted_at)
       VALUES ($1, 'Legacy', $2, 'custom', 'Truck', 'local', $3, 0, 0, 0, 0, 'new', true, $4, $5, $6) RETURNING id`,
       [store.shopA, `${rand()}@customers.example.test`, JSON.stringify(parts), front, rear, at])).id
-
-  // Genuine: uploaded minutes before the request that references it.
-  const good = legacy(); const goodRef = legacy()
-  await obj(good, '2026-09-01T10:00:00Z'); await obj(goodRef, '2026-09-01T10:01:00Z')
-  const goodLead = await lead(`${STORAGE_URL}/customer-uploads/${good}`, null, '2026-09-01T10:05:00Z', partsWithRef(goodRef))
-  // Hijacked: a second request references the same photo.
-  const shared = legacy()
-  await obj(shared, '2026-09-02T10:00:00Z')
-  const victim = await lead(shared, null, '2026-09-02T10:05:00Z')
-  const thief = await lead(shared, null, '2026-09-03T09:00:00Z')
-  // Photo uploaded after the request, or long before it.
-  const late = legacy(); const stale = legacy()
-  await obj(late, '2026-09-04T12:00:00Z'); await obj(stale, '2026-08-01T00:00:00Z')
-  const oddLead = await lead(late, stale, '2026-09-04T10:00:00Z')
-
-  await applyMigrations(pre, { from: BINDING })
-
-  const claims = (await pre.query(`SELECT lead_id, object_path FROM legacy_customer_photo_claims`)).rows
-  const claimed = (l: string) => claims.filter((c: any) => c.lead_id === l).map((c: any) => c.object_path).sort()
-  assert.deepEqual(claimed(goodLead), [good, goodRef].sort())
-  assert.deepEqual(claimed(victim), [], 'ambiguous: staff-only')
-  assert.deepEqual(claimed(thief), [])
-  assert.deepEqual(claimed(oddLead), [])
-
-  // Through a quote link, the genuine customer sees exactly their photos.
-  const send = async (leadId: string, front: string | null) => {
-    const q = await as(pre, { role: 'authenticated', id: store.a1 }, (tx: any) => one(tx,
+  const staffA = { role: 'authenticated', id: store.a1 }
+  const sendQuote = async (target: any, leadId: string, front: string | null, parts: unknown[] = ITEM) => {
+    const q = await as(target, staffA, (tx: any) => one(tx,
       `INSERT INTO quotes (lead_id, selected_parts, shipping_total, front_image_url) VALUES ($1, $2, 0, $3) RETURNING id, public_token`,
-      [leadId, JSON.stringify([...ITEM, ...partsWithRef(goodRef)]), front]))
-    await as(pre, service, (tx: any) => tx.query(`SELECT public.mark_quote_sent($1, $2)`, [q.id, store.a1]))
-    return as(pre, service, (tx: any) => one(tx, `SELECT public.customer_photo_paths('quote', $1) AS p`, [q.public_token])).then((r: any) => [...r.p].sort())
+      [leadId, JSON.stringify(parts), front]))
+    await as(target, service, (tx: any) => tx.query(`SELECT public.mark_quote_sent($1, $2)`, [q.id, store.a1]))
+    return q.public_token as string
   }
-  assert.deepEqual(await send(goodLead, `${STORAGE_URL}/customer-uploads/${good}`), [good, goodRef].sort())
-  assert.deepEqual(await send(thief, shared), [], 'the second request cannot see the shared photo')
-  assert.deepEqual(await send(victim, shared), [])
+  const paths = (token: string) =>
+    as(pre, service, (tx: any) => one(tx, `SELECT public.customer_photo_paths('quote', $1) AS p`, [token])).then((r: any) => [...r.p].sort())
+  return { pre, store, legacy, obj, lead, staffA, sendQuote, paths }
+}
 
-  // Staff-only fallback: staff of the shop can still read every legacy photo.
-  const staffSees = await as(pre, { role: 'authenticated', id: store.a1 }, (tx: any) =>
-    tx.query(`SELECT name FROM storage.objects WHERE name = ANY($1)`, [[good, goodRef, shared, late, stale]]))
-  assert.equal(staffSees.rows.length, 5)
+test('a legacy photo with only an inferred match stays staff-only', async () => {
+  const f = await legacyFixture()
+  // The strongest inferred match there is: uploaded minutes before the only
+  // request that references it, in that request's shop folder.
+  const front = f.legacy(); const ref = f.legacy()
+  await f.obj(front, '2026-09-01T10:00:00Z'); await f.obj(ref, '2026-09-01T10:01:00Z')
+  const leadId = await f.lead(`${STORAGE_URL}/customer-uploads/${front}`, null, '2026-09-01T10:05:00Z', partsWithRef(ref))
 
-  // Re-running the backfill is idempotent, and a later request referencing a
-  // claimed legacy photo makes it ambiguous, removing the claim.
-  const rerun = async () => (await as(pre, service, (tx: any) => one(tx, `SELECT public.backfill_legacy_customer_photo_claims() AS r`))).r
-  assert.deepEqual(await rerun(), { added: 0, removed: 0 })
-  await lead(good, null, '2026-09-05T00:00:00Z')
-  const r = await rerun()
-  assert.equal(r.removed, 1)
-  const after = (await pre.query(`SELECT object_path FROM legacy_customer_photo_claims WHERE lead_id = $1`, [goodLead])).rows.map((x: any) => x.object_path)
-  assert.deepEqual(after, [goodRef])
-  await pre.close()
+  await applyMigrations(f.pre, { from: BINDING })
+
+  const shares = await f.pre.query(`SELECT * FROM legacy_customer_photo_shares`)
+  assert.equal(shares.rows.length, 0, 'the migration shares nothing automatically')
+
+  // Customer: the quote and a shared build sheet open, but show no legacy photos.
+  const token = await f.sendQuote(f.pre, leadId, `${STORAGE_URL}/customer-uploads/${front}`, [...ITEM, ...partsWithRef(ref)])
+  assert.ok((await as(f.pre, anon, (tx: any) => one(tx, `SELECT public.get_public_quote($1) AS q`, [token]))).q)
+  assert.deepEqual(await f.paths(token), [])
+  const sheet = await as(f.pre, f.staffA, (tx: any) => one(tx, `INSERT INTO build_sheets (shop_id, lead_id, front_image_url, selected_parts)
+    VALUES ($1, $2, $3, $4) RETURNING id`, [f.store.shopA, leadId, front, JSON.stringify(partsWithRef(ref))]))
+  const share = await as(f.pre, f.staffA, (tx: any) => one(tx, `SELECT public.create_build_sheet_share_link($1) AS t`, [sheet.id]))
+  const sheetPaths = await as(f.pre, service, (tx: any) => one(tx, `SELECT public.customer_photo_paths('build_sheet', $1) AS p`, [share.t]))
+  assert.deepEqual([...sheetPaths.p], [])
+
+  // Staff of the shop still see the photos; staff of another shop do not.
+  const seen = (who: any) => as(f.pre, who, (tx: any) => tx.query(`SELECT name FROM storage.objects WHERE name = ANY($1)`, [[front, ref]]))
+  assert.equal((await seen(f.staffA)).rows.length, 2)
+  assert.equal((await seen({ role: 'authenticated', id: f.store.admin })).rows.length, 2)
+  assert.equal((await seen({ role: 'authenticated', id: f.store.b1 })).rows.length, 0)
+
+  // The lead page lists them as staff-only.
+  const listed = await as(f.pre, f.staffA, (tx: any) => one(tx, `SELECT public.lead_legacy_photos($1) AS r`, [leadId]))
+  assert.deepEqual(listed.r.map((p: any) => [p.path, p.shared, p.other_requests]).sort(), [[front, false, 0], [ref, false, 0]].sort())
+  await f.pre.close()
+})
+
+test('staff can verify and explicitly share a legacy photo; it can be undone', async () => {
+  const f = await legacyFixture()
+  const mine = f.legacy(); const shared = f.legacy()
+  await f.obj(mine, '2026-09-01T10:00:00Z'); await f.obj(shared, '2026-09-02T10:00:00Z')
+  const victim = await f.lead(mine, shared, '2026-09-02T10:05:00Z')
+  const other = await f.lead(shared, null, '2026-09-03T09:00:00Z') // also references `shared`
+  await applyMigrations(f.pre, { from: BINDING })
+
+  // The lead page warns that `shared` is on another request too.
+  const listed = await as(f.pre, f.staffA, (tx: any) => one(tx, `SELECT public.lead_legacy_photos($1) AS r`, [victim]))
+  const byPath = Object.fromEntries(listed.r.map((p: any) => [p.path, p]))
+  assert.equal(byPath[mine].other_requests, 0)
+  assert.equal(byPath[shared].other_requests, 1)
+
+  // After confirming with the customer, staff share one photo with this request.
+  await as(f.pre, f.staffA, (tx: any) => tx.query(`SELECT public.share_legacy_customer_photo($1, $2)`, [victim, mine]))
+  const token = await f.sendQuote(f.pre, victim, mine, [...ITEM, ...partsWithRef(shared)])
+  assert.deepEqual(await f.paths(token), [mine], 'only the explicitly shared photo is shown')
+  const audit = await as(f.pre, f.staffA, (tx: any) => one(tx, `SELECT shared_by FROM legacy_customer_photo_shares WHERE lead_id = $1`, [victim]))
+  assert.equal(audit.shared_by, f.store.a1)
+
+  // Sharing with one request never exposes it to the other request.
+  const otherToken = await f.sendQuote(f.pre, other, shared)
+  assert.deepEqual(await f.paths(otherToken), [])
+
+  // Undo.
+  await as(f.pre, f.staffA, (tx: any) => tx.query(`SELECT public.unshare_legacy_customer_photo($1, $2)`, [victim, mine]))
+  assert.deepEqual(await f.paths(token), [])
+  await f.pre.close()
+})
+
+test('only the request\'s own shop staff can share, and only legacy photos on that request', async () => {
+  const f = await legacyFixture()
+  const photo = f.legacy(); const unrelated = f.legacy()
+  await f.obj(photo, '2026-09-01T10:00:00Z'); await f.obj(unrelated, '2026-09-01T10:00:00Z')
+  const leadId = await f.lead(photo, null, '2026-09-01T10:05:00Z')
+  await f.lead(unrelated, null, '2026-09-01T10:06:00Z')
+  await applyMigrations(f.pre, { from: BINDING })
+  const share = (who: any, path: string, lead = leadId) =>
+    as(f.pre, who, (tx: any) => tx.query(`SELECT public.share_legacy_customer_photo($1, $2)`, [lead, path]))
+
+  await assert.rejects(share(anon, photo), /permission denied/i)
+  await assert.rejects(share({ role: 'authenticated', id: f.store.b1 }, photo), /Lead not found/)
+  await assert.rejects(share({ role: 'authenticated', id: f.store.noprofile }, photo), /Lead not found/)
+  await assert.rejects(share({ role: 'authenticated' }, photo), /Lead not found/)
+  await assert.rejects(share(f.staffA, unrelated), /not a legacy photo on this request/, 'a photo the request does not reference')
+  await assert.rejects(share(f.staffA, `${f.store.shopA}/${'a'.repeat(32)}/${uuid()}.jpg`), /not a legacy photo on this request/)
+  await assert.rejects(
+    as(f.pre, { role: 'authenticated', id: f.store.b1 }, (tx: any) => tx.query(`SELECT public.lead_legacy_photos($1)`, [leadId])),
+    /Lead not found/,
+  )
+  // No direct writes to the share table.
+  await assert.rejects(
+    as(f.pre, f.staffA, (tx: any) => tx.query(`INSERT INTO legacy_customer_photo_shares (lead_id, object_path, shared_by) VALUES ($1, $2, $3)`,
+      [leadId, photo, f.store.a1])),
+    /permission denied/i,
+  )
+  await share({ role: 'authenticated', id: f.store.admin }, photo)
+  // Shop B staff cannot see shop A's share records.
+  const seenByB = await as(f.pre, { role: 'authenticated', id: f.store.b1 }, (tx: any) => tx.query(`SELECT * FROM legacy_customer_photo_shares`))
+  assert.equal(seenByB.rows.length, 0)
+  await f.pre.close()
+})
+
+test('legacy-layout uploads made during rollout are staff-only too', async () => {
+  const s = await uploadSession()
+  const legacyUpload = `${ids.shopA}/${uuid()}.jpg`
+  await as(db, anon, (tx: any) => tx.query(`INSERT INTO storage.objects (bucket_id, name) VALUES ('customer-uploads', $1)`, [legacyUpload]))
+  // Even submitted with a valid key, a two-level path is not bound to the request.
+  const leadId = await newLead('shopA', true, legacyUpload, null, [], s.key)
+  const q = await quoteFor(leadId, 'a1', legacyUpload, null, ITEM)
+  assert.deepEqual(await photoPaths('quote', q.public_token), [])
+  const staff = await as(db, user('a1'), (tx: any) => tx.query(`SELECT name FROM storage.objects WHERE name = $1`, [legacyUpload]))
+  assert.equal(staff.rows.length, 1)
 })

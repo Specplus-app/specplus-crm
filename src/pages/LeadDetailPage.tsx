@@ -11,6 +11,7 @@ import LeadQuoteConversation from '../components/LeadQuoteConversation'
 import LeadSchedulePanel from '../components/LeadSchedulePanel'
 import PreconfiguredBuildEditor from '../components/PreconfiguredBuildEditor'
 import BuildSheetShareControl from '../components/BuildSheetShareControl'
+import LegacyPhotoSharing from '../components/LegacyPhotoSharing'
 import { STAFF_PHOTO_ACCESS, useCustomerPhotos } from '../lib/customerPhotos'
 import { ArrowLeft, Mail, Phone, MapPin, Calendar, DollarSign, Package, Send, User, Clock, Layers, Palette, Image as ImageIcon, Pencil, PencilRuler, type LucideIcon } from 'lucide-react'
 
@@ -420,6 +421,8 @@ export default function LeadDetailPage() {
             </div>
           </div>
         )}
+
+        {lead.is_custom && <LegacyPhotoSharing leadId={lead.id} />}
 
         {/* Vehicle photos with selected-part highlights (pre-configured builds) */}
         {hasTemplatePhotos && (

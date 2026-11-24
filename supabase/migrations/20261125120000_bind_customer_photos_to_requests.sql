@@ -20,25 +20,30 @@ quote link. A matching shop folder is not proof of ownership.
      claim it.
 
 2. Existing (legacy) photos: `<shop id>/<uuid>.<ext>`
-   - legacy_customer_photo_claims records which lead owns a legacy path. It is
-     filled by backfill_legacy_customer_photo_claims() under conservative rules:
-     the path is in the lead's shop folder, exactly ONE lead references it, and
-     the object was uploaded within 24 hours before that lead was submitted.
-   - Ambiguous or unmatched legacy photos are not shown to customers. They stay
-     visible to staff through the shop-folder Storage policy (staff-only
-     fallback).
-   - The backfill runs here and is safe to re-run after the new frontend is
-     live, to pick up requests submitted by the old frontend in between
-     (service_role only). A path that became ambiguous loses its claim.
+   - Legacy photos are STAFF-ONLY. There is no automatic matching by upload
+     time or by how many requests reference a photo: while every path was
+     listable, those signals could be arranged by someone else, so they are
+     not proof that a photo belongs to a request.
+   - The shop's staff (and admins) still see every legacy photo through the
+     shop-folder Storage policy.
+   - When needed, a staff member can explicitly share one legacy photo with
+     one request's customer, after confirming with that customer that the
+     photo is theirs: share_legacy_customer_photo(lead, path). This is audited
+     (who, when) in legacy_customer_photo_shares and can be undone with
+     unshare_legacy_customer_photo(). lead_legacy_photos(lead) lists a lead's
+     legacy photos, their share state, and how many other requests reference
+     each one.
 
 3. customer_photo_paths(kind, token) now returns a referenced path only if it
    belongs to the quote's or build sheet's own lead: a keyed path whose ref
-   matches the lead's upload_ref, or a legacy path claimed by that lead.
+   matches the lead's upload_ref, or a legacy path a staff member explicitly
+   shared with that lead.
 
 4. Anonymous uploads accept the keyed layout. The legacy two-level layout is
    still accepted so the currently deployed frontend keeps working during
-   rollout. Such uploads are staff-only unless later claimed by the backfill.
-   Remove it once the new frontend is live everywhere (see the rollout doc).
+   rollout. Such uploads are staff-only (they can be shared explicitly like any
+   legacy photo). Remove the legacy layout once the new frontend is live
+   everywhere (see the rollout doc).
 */
 
 BEGIN;
@@ -121,36 +126,57 @@ AS $$
   SELECT (
       -- keyed: <shop>/<upload ref>/<uuid>.<ext>
       p_name ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{32}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|jpeg|png|webp|heic|heif)$'
-      -- legacy (rollout window only; never customer-visible unless claimed)
+      -- legacy (rollout window only; staff-only unless explicitly shared)
       OR p_name ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|jpeg|png|webp|heic|heif)$'
     )
     AND EXISTS (SELECT 1 FROM public.shops s WHERE s.id::text = split_part(p_name, '/', 1));
 $$;
 
 -- ---------------------------------------------------------------------------
--- 3. Legacy claims
+-- 3. Legacy photos: staff-only unless a staff member explicitly shares one
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS public.legacy_customer_photo_claims (
+-- There is no automatic matching. Timestamps and "only one request references
+-- it" are inferences an attacker could have arranged while every path was
+-- listable, so they are not proof of ownership.
+CREATE TABLE IF NOT EXISTS public.legacy_customer_photo_shares (
   lead_id     uuid NOT NULL REFERENCES public.leads(id) ON DELETE CASCADE,
   object_path text NOT NULL,
-  claimed_at  timestamptz NOT NULL DEFAULT now(),
+  shared_by   uuid NOT NULL,
+  shared_at   timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (lead_id, object_path)
 );
-CREATE INDEX IF NOT EXISTS legacy_customer_photo_claims_path_idx
-  ON public.legacy_customer_photo_claims (object_path);
+CREATE INDEX IF NOT EXISTS legacy_customer_photo_shares_path_idx
+  ON public.legacy_customer_photo_shares (object_path);
 
-ALTER TABLE public.legacy_customer_photo_claims ENABLE ROW LEVEL SECURITY;
-REVOKE ALL PRIVILEGES ON TABLE public.legacy_customer_photo_claims FROM PUBLIC, anon, authenticated;
+ALTER TABLE public.legacy_customer_photo_shares ENABLE ROW LEVEL SECURITY;
+REVOKE ALL PRIVILEGES ON TABLE public.legacy_customer_photo_shares FROM PUBLIC, anon, authenticated;
+-- Staff may see the shares on their own shop's leads (audit). Writes go
+-- through the functions below only.
+GRANT SELECT ON TABLE public.legacy_customer_photo_shares TO authenticated;
 
--- Every legacy (two-level) customer-upload path each lead references.
-CREATE OR REPLACE FUNCTION public.lead_legacy_photo_refs()
-RETURNS TABLE (lead_id uuid, shop_id uuid, lead_submitted_at timestamptz, object_path text)
+DROP POLICY IF EXISTS "staff_select_legacy_photo_shares" ON public.legacy_customer_photo_shares;
+CREATE POLICY "staff_select_legacy_photo_shares"
+ON public.legacy_customer_photo_shares FOR SELECT
+TO authenticated
+USING (
+  public.get_current_role() = 'admin'
+  OR EXISTS (
+    SELECT 1 FROM public.leads l
+    WHERE l.id = legacy_customer_photo_shares.lead_id
+      AND public.get_current_role() = 'shop_user'
+      AND l.shop_id = public.get_current_shop_id()
+  )
+);
+
+-- Legacy (two-level) customer-upload paths one lead references, in its shop.
+CREATE OR REPLACE FUNCTION public.lead_legacy_photo_paths(p_lead_id uuid)
+RETURNS SETOF text
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
-  SELECT DISTINCT l.id, l.shop_id, l.submitted_at, refs.p
+  SELECT DISTINCT refs.p
   FROM public.leads l
   CROSS JOIN LATERAL (
     SELECT public.customer_upload_object_path(l.front_image_url) AS p
@@ -159,55 +185,113 @@ AS $$
     SELECT public.customer_upload_object_path(e ->> 'reference_image_path')
     FROM jsonb_array_elements(CASE WHEN jsonb_typeof(l.selected_parts) = 'array' THEN l.selected_parts ELSE '[]'::jsonb END) e
   ) refs
-  WHERE refs.p IS NOT NULL
+  WHERE l.id = p_lead_id
+    AND refs.p IS NOT NULL
     AND refs.p ~ '^[^/]+/[^/]+$'
     AND split_part(refs.p, '/', 1) = l.shop_id::text;
 $$;
 
-REVOKE ALL ON FUNCTION public.lead_legacy_photo_refs() FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.lead_legacy_photo_paths(uuid) FROM PUBLIC, anon, authenticated;
 
-CREATE OR REPLACE FUNCTION public.backfill_legacy_customer_photo_claims()
+-- Staff of the lead's shop (or an admin): the caller's role for that lead, or NULL.
+CREATE OR REPLACE FUNCTION public.legacy_photo_staff_for_lead(p_lead_id uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.profiles p
+    JOIN public.leads l ON l.id = p_lead_id
+    WHERE p.id = auth.uid()
+      AND (p.role = 'admin' OR (p.role = 'shop_user' AND p.shop_id = l.shop_id))
+  );
+$$;
+
+REVOKE ALL ON FUNCTION public.legacy_photo_staff_for_lead(uuid) FROM PUBLIC, anon, authenticated;
+
+-- For the lead page: each legacy photo on this lead, whether it is shared
+-- with the customer, and how many OTHER requests also reference it (a warning
+-- sign that the photo may not belong to this customer).
+CREATE OR REPLACE FUNCTION public.lead_legacy_photos(p_lead_id uuid)
 RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF auth.uid() IS NULL OR NOT public.legacy_photo_staff_for_lead(p_lead_id) THEN
+    RAISE EXCEPTION 'Lead not found' USING ERRCODE = 'P0002';
+  END IF;
+
+  RETURN coalesce((
+    SELECT jsonb_agg(jsonb_build_object(
+      'path', p.path,
+      'shared', s.lead_id IS NOT NULL,
+      'shared_at', s.shared_at,
+      'other_requests', (
+        SELECT count(*) FROM public.leads o
+        WHERE o.id <> p_lead_id
+          AND o.shop_id = (SELECT shop_id FROM public.leads WHERE id = p_lead_id)
+          AND p.path IN (SELECT public.lead_legacy_photo_paths(o.id))
+      )
+    ) ORDER BY p.path)
+    FROM public.lead_legacy_photo_paths(p_lead_id) AS p(path)
+    LEFT JOIN public.legacy_customer_photo_shares s
+      ON s.lead_id = p_lead_id AND s.object_path = p.path
+  ), '[]'::jsonb);
+END;
+$$;
+
+-- Explicit, audited re-share of one legacy photo with this lead's customer.
+-- Staff should do this only after confirming with the customer that the
+-- photo is theirs (see docs/customer-data-privacy-rollout.md).
+CREATE OR REPLACE FUNCTION public.share_legacy_customer_photo(p_lead_id uuid, p_path text)
+RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
-DECLARE
-  v_removed integer;
-  v_added   integer;
 BEGIN
-  -- A path referenced by more than one lead is ambiguous: nobody gets it.
-  WITH ambiguous AS (
-    SELECT object_path FROM public.lead_legacy_photo_refs() GROUP BY object_path HAVING count(DISTINCT lead_id) > 1
-  )
-  DELETE FROM public.legacy_customer_photo_claims c
-  USING ambiguous a
-  WHERE c.object_path = a.object_path;
-  GET DIAGNOSTICS v_removed = ROW_COUNT;
+  IF auth.uid() IS NULL OR NOT public.legacy_photo_staff_for_lead(p_lead_id) THEN
+    RAISE EXCEPTION 'Lead not found' USING ERRCODE = 'P0002';
+  END IF;
+  IF p_path IS NULL OR p_path NOT IN (SELECT public.lead_legacy_photo_paths(p_lead_id)) THEN
+    RAISE EXCEPTION 'That photo is not a legacy photo on this request' USING ERRCODE = '22023';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM storage.objects o WHERE o.bucket_id = 'customer-uploads' AND o.name = p_path) THEN
+    RAISE EXCEPTION 'Photo not found' USING ERRCODE = 'P0002';
+  END IF;
 
-  WITH refs AS (
-    SELECT r.*, count(*) OVER (PARTITION BY r.object_path) AS n
-    FROM public.lead_legacy_photo_refs() r
-  )
-  INSERT INTO public.legacy_customer_photo_claims (lead_id, object_path)
-  SELECT r.lead_id, r.object_path
-  FROM refs r
-  JOIN storage.objects o
-    ON o.bucket_id = 'customer-uploads' AND o.name = r.object_path
-  WHERE r.n = 1
-    AND o.created_at <= r.lead_submitted_at
-    AND o.created_at >= r.lead_submitted_at - interval '24 hours'
-  ON CONFLICT DO NOTHING;
-  GET DIAGNOSTICS v_added = ROW_COUNT;
-
-  RETURN jsonb_build_object('added', v_added, 'removed', v_removed);
+  INSERT INTO public.legacy_customer_photo_shares (lead_id, object_path, shared_by)
+  VALUES (p_lead_id, p_path, auth.uid())
+  ON CONFLICT (lead_id, object_path) DO UPDATE SET shared_by = EXCLUDED.shared_by, shared_at = now();
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.backfill_legacy_customer_photo_claims() FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.backfill_legacy_customer_photo_claims() TO service_role;
+CREATE OR REPLACE FUNCTION public.unshare_legacy_customer_photo(p_lead_id uuid, p_path text)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF auth.uid() IS NULL OR NOT public.legacy_photo_staff_for_lead(p_lead_id) THEN
+    RAISE EXCEPTION 'Lead not found' USING ERRCODE = 'P0002';
+  END IF;
+  DELETE FROM public.legacy_customer_photo_shares WHERE lead_id = p_lead_id AND object_path = p_path;
+END;
+$$;
 
-SELECT public.backfill_legacy_customer_photo_claims();
+REVOKE ALL ON FUNCTION public.lead_legacy_photos(uuid) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.share_legacy_customer_photo(uuid, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.unshare_legacy_customer_photo(uuid, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.lead_legacy_photos(uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.share_legacy_customer_photo(uuid, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.unshare_legacy_customer_photo(uuid, text) TO authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 4. Customer photo authorization: the record's own request only
@@ -274,10 +358,10 @@ BEGIN
     AND (
       -- uploaded under this request's key
       (v_upload_ref IS NOT NULL AND p ~ '^[^/]+/[0-9a-f]{32}/[^/]+$' AND split_part(p, '/', 2) = v_upload_ref)
-      -- legacy photo claimed by this request
+      -- legacy photo a staff member explicitly shared with this request
       OR EXISTS (
-        SELECT 1 FROM public.legacy_customer_photo_claims c
-        WHERE c.lead_id = v_lead_id AND c.object_path = p
+        SELECT 1 FROM public.legacy_customer_photo_shares sh
+        WHERE sh.lead_id = v_lead_id AND sh.object_path = p
       )
     );
 
