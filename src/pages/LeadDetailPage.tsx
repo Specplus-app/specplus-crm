@@ -10,10 +10,9 @@ import LeadTimeline from '../components/LeadTimeline'
 import LeadQuoteConversation from '../components/LeadQuoteConversation'
 import LeadSchedulePanel from '../components/LeadSchedulePanel'
 import PreconfiguredBuildEditor from '../components/PreconfiguredBuildEditor'
+import BuildSheetShareControl from '../components/BuildSheetShareControl'
+import { STAFF_PHOTO_ACCESS, useCustomerPhotos } from '../lib/customerPhotos'
 import { ArrowLeft, Mail, Phone, MapPin, Calendar, DollarSign, Package, Send, User, Clock, Layers, Palette, Image as ImageIcon, Pencil, PencilRuler, type LucideIcon } from 'lucide-react'
-
-const customUploadUrl = (path: string | null): string | null =>
-  path ? supabase.storage.from('customer-uploads').getPublicUrl(path).data.publicUrl : null
 
 const vehicleImageUrl = (path: string | null): string | null =>
   path ? supabase.storage.from('vehicles').getPublicUrl(path).data.publicUrl : null
@@ -142,6 +141,15 @@ export default function LeadDetailPage() {
   const [templateImages, setTemplateImages] = useState<{ front: string | null; rear: string | null }>({ front: null, rear: null })
   const [partShapes, setPartShapes] = useState<Map<string, { svg_path: string | null; alt_view_svg_path: string | null; view: 'front' | 'rear' }>>(new Map())
   const [editingPreconfiguredBuild, setEditingPreconfiguredBuild] = useState(false)
+  // Customer photos are private: staff see signed URLs for their shop only.
+  const customUploadUrl = useCustomerPhotos(
+    [
+      lead?.front_image_url,
+      lead?.rear_image_url,
+      ...(Array.isArray(lead?.selected_parts) ? lead!.selected_parts : []).map((p) => p.reference_image_path),
+    ],
+    STAFF_PHOTO_ACCESS,
+  )
 
   const loadLead = useCallback(async () => {
     if (!leadId) return
@@ -199,7 +207,7 @@ export default function LeadDetailPage() {
   // For pre-configured vehicles the customer uploads no photos, so load the
   // vehicle template images and each part's highlight shape to display them.
   useEffect(() => {
-    const uploaded = customUploadUrl(lead?.front_image_url ?? null) || customUploadUrl(lead?.rear_image_url ?? null)
+    const uploaded = !!(lead?.front_image_url || lead?.rear_image_url)
     if (!lead || uploaded || !lead.vehicle_id) return
     let active = true
     ;(async () => {
@@ -384,7 +392,7 @@ export default function LeadDetailPage() {
         </div>
 
         {/* Customer photos (custom builds) */}
-        {lead.is_custom && (customUploadUrl(lead.front_image_url) || customUploadUrl(lead.rear_image_url)) && (
+        {lead.is_custom && (lead.front_image_url || lead.rear_image_url) && (
           <div className="bg-white rounded-2xl border border-zinc-200 p-6 mb-4">
             <h2 className="text-sm font-semibold text-zinc-900 mb-1 flex items-center gap-2">
               <ImageIcon size={16} className="text-zinc-400" />
@@ -616,6 +624,7 @@ export default function LeadDetailPage() {
 
         {/* Custom and preconfigured leads share the customer quote workflow. */}
         <LeadQuoteCard lead={lead} readOnly={readOnly} onFollowUpSent={() => setTimelineKey((n) => n + 1)} />
+        <BuildSheetShareControl leadId={lead.id} readOnly={readOnly} />
         <LeadQuoteConversation lead={lead} readOnly={readOnly} refreshKey={timelineKey} />
         <LeadSchedulePanel
           lead={lead}

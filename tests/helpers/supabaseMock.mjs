@@ -33,5 +33,15 @@ export function createClient(_url, key, options = {}) {
       if (state.rpcHandlers?.[name]) return state.rpcHandlers[name](args, { isAdmin })
       return state.rpcResult ?? { data: { sent_at: '2026-10-06T00:00:00Z' }, error: null }
     },
+    // Storage signing: records each call; state.storageHandler may override.
+    storage: {
+      from: (bucket) => ({
+        createSignedUrls: async (paths, expiresIn) => {
+          ;(state.storageCalls ??= []).push({ bucket, paths, expiresIn, isAdmin })
+          if (state.storageHandler) return state.storageHandler(bucket, paths, expiresIn)
+          return { data: paths.map((path) => ({ path, signedUrl: `https://signed.example.test/${bucket}/${path}?ttl=${expiresIn}`, error: null })), error: null }
+        },
+      }),
+    },
   }
 }

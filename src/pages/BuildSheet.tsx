@@ -2,6 +2,11 @@ import { useState, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { supabase, BuildSheet as BuildSheetRecord, PartEntry, formatCurrency, getHighlightColor, svgPathAnchor, shapedPartsOnView } from '../lib/supabase'
 import { AlertCircle, Layers, Clock, Package, Palette, X } from 'lucide-react'
+import { classifyBuildLink } from '../lib/buildSheetShare'
+import { useCustomerPhotos } from '../lib/customerPhotos'
+
+// What get_shared_build_sheet() returns: customer-facing fields only.
+type SharedBuildSheet = Omit<BuildSheetRecord, 'id' | 'lead_id' | 'shop_id' | 'customer_email' | 'updated_at'>
 
 type EnlargedPhoto = { url: string; label: string; view: 'front' | 'rear' } | null
 
@@ -75,25 +80,27 @@ function PhotoLabels({ boxes }: { boxes: PartEntry[] }) {
 
 export default function BuildSheet() {
   const { id } = useParams<{ id: string }>()
-  const [sheet, setSheet] = useState<BuildSheetRecord | null>(null)
+  const linkKind = classifyBuildLink(id)
+  const [sheet, setSheet] = useState<SharedBuildSheet | null>(null)
   const [loading, setLoading] = useState(true)
   const [enlarged, setEnlarged] = useState<EnlargedPhoto>(null)
+  const photoUrl = useCustomerPhotos(
+    [sheet?.front_image_url, sheet?.rear_image_url],
+    sheet && id && linkKind === 'share' ? { mode: 'build_sheet', token: id } : null,
+  )
 
   useEffect(() => {
-    if (!id) {
+    if (!id || linkKind !== 'share') {
       setLoading(false)
       return
     }
     supabase
-      .from('build_sheets')
-      .select('*')
-      .eq('id', id)
-      .maybeSingle()
+      .rpc('get_shared_build_sheet', { p_token: id })
       .then(({ data }) => {
-        setSheet(data as BuildSheetRecord | null)
+        setSheet((data as SharedBuildSheet | null) ?? null)
         setLoading(false)
       })
-  }, [id])
+  }, [id, linkKind])
 
   if (loading) {
     return (
@@ -108,8 +115,12 @@ export default function BuildSheet() {
       <div className="dark-surface min-h-screen flex items-center justify-center bg-obsidian-950 bg-radial-spotlight text-slate-100 px-4">
         <div className="text-center">
           <AlertCircle size={40} className="mx-auto text-red-400 mb-3" />
-          <p className="text-lg font-medium">Build sheet not found</p>
-          <p className="text-sm text-slate-500 mt-1">This link may have expired or been removed.</p>
+          <p className="text-lg font-medium">{linkKind === 'retired' ? 'This build sheet link is no longer active' : 'Build sheet not found'}</p>
+          <p className="text-sm text-slate-500 mt-1">
+            {linkKind === 'retired'
+              ? 'For your privacy, older build sheet links were turned off. Please ask the shop to send you a new link.'
+              : 'This link may have expired or been removed.'}
+          </p>
         </div>
       </div>
     )
@@ -119,7 +130,7 @@ export default function BuildSheet() {
   const vehicleLine = [sheet.vehicle_year, sheet.vehicle_make, sheet.vehicle_model, sheet.vehicle_trim]
     .filter(Boolean).join(' ') || sheet.vehicle_name
 
-  const photos = ([['Front 3/4', 'front', sheet.front_image_url], ['Rear', 'rear', sheet.rear_image_url]] as const)
+  const photos = ([['Front 3/4', 'front', photoUrl(sheet.front_image_url)], ['Rear', 'rear', photoUrl(sheet.rear_image_url)]] as const)
     .filter(([, , url]) => !!url)
 
   const groupIsBuyNew = (gid: string | null | undefined) => parts.some((p) => p.group_id === gid && p.type === 'new')
