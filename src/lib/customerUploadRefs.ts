@@ -32,7 +32,7 @@ export function customerUploadPath(ref: string | null | undefined): string | nul
     const m = OBJECT_URL_RE.exec(ref)
     return m && m[1] ? decodeURIComponent(m[1]) : null
   }
-  return /^[^/]+\/[^/]+$/.test(ref) ? ref : null
+  return /^[^/]+\/[^/]+(\/[^/]+)?$/.test(ref) ? ref : null
 }
 
 export function customerUploadError(file: { type: string; size: number }): string | null {
@@ -41,8 +41,28 @@ export function customerUploadError(file: { type: string; size: number }): strin
   return null
 }
 
-// Object name for a new upload: `<shop id>/<random uuid>.<ext from MIME type>`.
-export function customerUploadObjectName(shopId: string, file: { type: string }, uuid: string = crypto.randomUUID()): string | null {
+// Each custom request gets a random upload key. Its photos are stored under
+// <shop id>/<upload ref>/, where upload ref = first 32 hex chars of
+// sha256(key). The request is submitted with the key; the database keeps only
+// the ref (customer_upload_ref()), so knowing a photo path never lets another
+// request claim it.
+export function newUploadKey(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32))
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+export async function customerUploadRef(uploadKey: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(uploadKey))
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('').slice(0, 32)
+}
+
+// Object name for a new upload: `<shop id>/<upload ref>/<random uuid>.<ext from MIME type>`.
+export function customerUploadObjectName(
+  shopId: string,
+  uploadRef: string,
+  file: { type: string },
+  uuid: string = crypto.randomUUID(),
+): string | null {
   const ext = CUSTOMER_UPLOAD_TYPES[file.type]
-  return ext ? `${shopId}/${uuid}.${ext}` : null
+  return ext && /^[0-9a-f]{32}$/.test(uploadRef) ? `${shopId}/${uploadRef}/${uuid}.${ext}` : null
 }

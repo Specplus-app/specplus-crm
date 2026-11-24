@@ -5,7 +5,7 @@ import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { registerHooks } from 'node:module'
 import {
-  CUSTOMER_UPLOAD_MAX_BYTES, customerUploadError, customerUploadObjectName, customerUploadPath,
+  CUSTOMER_UPLOAD_MAX_BYTES, customerUploadError, customerUploadObjectName, customerUploadPath, customerUploadRef, newUploadKey,
 } from '../src/lib/customerUploadRefs.ts'
 import { classifyBuildLink, buildSheetShareUrl } from '../src/lib/buildSheetShare.ts'
 
@@ -22,17 +22,36 @@ test('customerUploadPath recognizes bare paths and customer-uploads URLs only', 
   assert.equal(customerUploadPath(`https://p.example.test/storage/v1/object/sign/customer-uploads/${FILE}?token=t`), FILE)
   assert.equal(customerUploadPath(`https://p.example.test/storage/v1/object/public/vehicles/${SHOP}/front.jpg`), null)
   assert.equal(customerUploadPath('https://cdn.example.test/logo.png'), null)
-  assert.equal(customerUploadPath('a/b/c.jpg'), null)
+  const keyed = `${SHOP}/${'a'.repeat(32)}/0e8b1f4c-5d2a-4b3e-8c7f-9a6d1e2b3c4d.png`
+  assert.equal(customerUploadPath(keyed), keyed)
+  assert.equal(customerUploadPath(`https://p.example.test/storage/v1/object/public/customer-uploads/${keyed}`), keyed)
+  assert.equal(customerUploadPath('a/b/c/d.jpg'), null)
   assert.equal(customerUploadPath(null), null)
   assert.equal(customerUploadPath(''), null)
 })
 
-test('uploads are named from the MIME type, never the original file name', () => {
-  assert.equal(customerUploadObjectName(SHOP, { type: 'image/jpeg' }, 'u'), `${SHOP}/u.jpg`)
-  assert.equal(customerUploadObjectName(SHOP, { type: 'image/heic' }, 'u'), `${SHOP}/u.heic`)
-  assert.equal(customerUploadObjectName(SHOP, { type: 'image/svg+xml' }, 'u'), null)
-  assert.equal(customerUploadObjectName(SHOP, { type: 'text/html' }, 'u'), null)
-  assert.match(customerUploadObjectName(SHOP, { type: 'image/png' })!, new RegExp(`^${SHOP}/[0-9a-f-]{36}\\.png$`))
+test('uploads go under the request\'s upload ref and are named from the MIME type', () => {
+  const ref = 'b'.repeat(32)
+  assert.equal(customerUploadObjectName(SHOP, ref, { type: 'image/jpeg' }, 'u'), `${SHOP}/${ref}/u.jpg`)
+  assert.equal(customerUploadObjectName(SHOP, ref, { type: 'image/heic' }, 'u'), `${SHOP}/${ref}/u.heic`)
+  assert.equal(customerUploadObjectName(SHOP, ref, { type: 'image/svg+xml' }, 'u'), null)
+  assert.equal(customerUploadObjectName(SHOP, ref, { type: 'text/html' }, 'u'), null)
+  assert.equal(customerUploadObjectName(SHOP, 'short', { type: 'image/png' }, 'u'), null)
+  assert.match(customerUploadObjectName(SHOP, ref, { type: 'image/png' })!, new RegExp(`^${SHOP}/${ref}/[0-9a-f-]{36}\\.png$`))
+})
+
+test('upload keys are random and their refs are a stable sha256 prefix', async () => {
+  const a = newUploadKey()
+  const b = newUploadKey()
+  assert.match(a, /^[0-9a-f]{64}$/)
+  assert.notEqual(a, b)
+  const ref = await customerUploadRef(a)
+  assert.match(ref, /^[0-9a-f]{32}$/)
+  assert.equal(await customerUploadRef(a), ref)
+  assert.notEqual(await customerUploadRef(b), ref)
+  // Independent check against node:crypto.
+  const { createHash } = await import('node:crypto')
+  assert.equal(await customerUploadRef('0'.repeat(64)), createHash('sha256').update('0'.repeat(64)).digest('hex').slice(0, 32))
 })
 
 test('client-side checks match the bucket limits', () => {

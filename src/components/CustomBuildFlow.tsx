@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { supabase, Shop, CustomPartBox } from '../lib/supabase'
-import { CUSTOMER_UPLOADS_BUCKET, customerUploadError, customerUploadObjectName } from '../lib/customerPhotos'
+import { CUSTOMER_UPLOADS_BUCKET, customerUploadError, customerUploadObjectName, customerUploadRef, newUploadKey } from '../lib/customerPhotos'
 import {
   Shield, ArrowLeft, ArrowRight, Upload, X, Plus, Send, User, Mail, Phone, MapPin, Calendar,
   Palette, Image as ImageIcon, AlertCircle, CheckCircle2, Trash2, Pencil, Car, Hash, Minus, RotateCcw,
@@ -25,8 +25,17 @@ function previewUrl(path: string | null): string | null {
   return path ? localPreviews.get(path) ?? null : null
 }
 
-async function uploadImage(shopId: string, file: File): Promise<string | null> {
-  const path = customerUploadObjectName(shopId, file)
+// One upload session per custom request: its photos go under the session's
+// upload ref, and the request is submitted with the key that proves ownership.
+type UploadSession = { key: string; ref: Promise<string> }
+
+function newUploadSession(): UploadSession {
+  const key = newUploadKey()
+  return { key, ref: customerUploadRef(key) }
+}
+
+async function uploadImage(shopId: string, session: UploadSession, file: File): Promise<string | null> {
+  const path = customerUploadObjectName(shopId, await session.ref, file)
   if (!path) return null
   const { error } = await supabase.storage.from(CUSTOMER_UPLOADS_BUCKET).upload(path, file, { upsert: false, contentType: file.type })
   if (error) return null
@@ -43,6 +52,7 @@ export default function CustomBuildFlow({
   initialPaintCode: string
   onBack: () => void
 }) {
+  const [uploadSession] = useState(newUploadSession)
   const [frontPath, setFrontPath] = useState<string | null>(null)
   const [rearPath, setRearPath] = useState<string | null>(null)
   const [uploadingView, setUploadingView] = useState<'front' | 'rear' | null>(null)
@@ -142,7 +152,7 @@ export default function CustomBuildFlow({
     const invalid = customerUploadError(file)
     if (invalid) { setUploadError(invalid); return }
     setUploadingView(view)
-    const path = await uploadImage(shopId, file)
+    const path = await uploadImage(shopId, uploadSession, file)
     setUploadingView(null)
     if (!path) { setUploadError('Upload failed. Please try again.'); return }
     if (view === 'front') { setFrontPath(path); setActiveView('front') }
@@ -300,6 +310,8 @@ export default function CustomBuildFlow({
       grand_total: 0,
       estimated_lead_time_days: 0,
       status: 'new',
+      // Proves this request owns the photos above; the database keeps only its hash.
+      upload_key: uploadSession.key,
     })
     setSubmitting(false)
     if (error) setSubmitError('Failed to submit. Please try again.')
@@ -698,6 +710,7 @@ export default function CustomBuildFlow({
       {(pendingBox || editingItem) && (
         <CustomPartModal
           shopId={shopId}
+          uploadSession={uploadSession}
           initial={editingItem}
           onCancel={() => { setPendingBox(null); setEditingItem(null) }}
           onConfirm={addItem}
@@ -723,9 +736,10 @@ export default function CustomBuildFlow({
 }
 
 function CustomPartModal({
-  shopId, initial, onCancel, onConfirm,
+  shopId, uploadSession, initial, onCancel, onConfirm,
 }: {
   shopId: string
+  uploadSession: UploadSession
   initial: CustomItem | null
   onCancel: () => void
   onConfirm: (v: { name: string; type: 'new' | 'send'; notes: string; reference_image_path: string | null }) => void
@@ -743,7 +757,7 @@ function CustomPartModal({
     const invalid = customerUploadError(file)
     if (invalid) { setError(invalid); return }
     setUploading(true)
-    const path = await uploadImage(shopId, file)
+    const path = await uploadImage(shopId, uploadSession, file)
     setUploading(false)
     if (!path) { setError('Upload failed. Please try again.'); return }
     setRefPath(path)

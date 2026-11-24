@@ -9,9 +9,10 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 // @ts-ignore -- plain JS helper
 import { createDb, applyMigrations, as, one } from './helpers/pgliteDb.mjs'
-import { customerUploadPath } from '../src/lib/customerUploadRefs.ts'
+import { customerUploadPath, customerUploadRef, newUploadKey } from '../src/lib/customerUploadRefs.ts'
 
 const PHASE1 = '20261124120000_customer_data_privacy.sql'
+const BINDING = '20261125120000_bind_customer_photos_to_requests.sql'
 const PHASE2_SQL = readFileSync(new URL('../supabase/rollout/20261124130000_make_customer_uploads_private.sql', import.meta.url), 'utf8')
 const STORAGE_URL = 'https://project.supabase.example.test/storage/v1/object/public'
 
@@ -50,9 +51,9 @@ async function seed(target: any, store: Record<string, string>) {
 async function newSheet(shopKey: string, userKey: string, extra: Record<string, unknown> = {}) {
   const front = extra.front ?? `${STORAGE_URL}/customer-uploads/${ids[shopKey]}/${uuid()}.jpg`
   return as(db, user(userKey), (tx: any) => one(tx, `INSERT INTO build_sheets (shop_id, shop_name, customer_name, customer_email, vehicle_name,
-      front_image_url, rear_image_url, selected_parts, parts_total, grand_total)
-    VALUES ($1, 'Shop', 'Jordan Customer', 'jordan@customers.example.test', 'Bronco', $2, $3, $4, 650, 650) RETURNING id, front_image_url`,
-    [ids[shopKey], front, extra.rear ?? null, JSON.stringify(extra.parts ?? [{ id: 'p', name: 'Bumper', type: 'new', price: 650 }])]))
+      front_image_url, rear_image_url, selected_parts, parts_total, grand_total, lead_id)
+    VALUES ($1, 'Shop', 'Jordan Customer', 'jordan@customers.example.test', 'Bronco', $2, $3, $4, 650, 650, $5) RETURNING id, front_image_url`,
+    [ids[shopKey], front, extra.rear ?? null, JSON.stringify(extra.parts ?? [{ id: 'p', name: 'Bumper', type: 'new', price: 650 }]), extra.lead ?? null]))
 }
 
 const shareLink = (who: any, sheetId: string) =>
@@ -201,7 +202,10 @@ test('staff read only their own shop\'s customer uploads; admins read all', asyn
 test('anonymous custom-request uploads are limited to a controlled path', async () => {
   const upload = (name: string, who: any = anon) =>
     as(db, who, (tx: any) => tx.query(`INSERT INTO storage.objects (bucket_id, name) VALUES ('customer-uploads', $1)`, [name]))
-  for (const ext of ['jpg', 'jpeg', 'png', 'webp', 'heic', 'heif']) await upload(`${ids.shopA}/${uuid()}.${ext}`)
+  const keyed = await customerUploadRef(newUploadKey())
+  for (const ext of ['jpg', 'jpeg', 'png', 'webp', 'heic', 'heif']) await upload(`${ids.shopA}/${keyed}/${uuid()}.${ext}`)
+  // Legacy layout stays accepted during rollout (staff-only unless claimed).
+  await upload(`${ids.shopA}/${uuid()}.jpg`)
   await upload(`${ids.shopB}/${uuid()}.jpg`, user('a1'))
 
   const rejected = [
@@ -210,6 +214,10 @@ test('anonymous custom-request uploads are limited to a controlled path', async 
     `${ids.shopA}/${uuid()}.JPG.exe`,
     `${ids.shopA}/photo.jpg`,
     `${ids.shopA}/nested/${uuid()}.jpg`,
+    `${ids.shopA}/${keyed}/${uuid()}.svg`,
+    `${ids.shopA}/${keyed.slice(0, 31)}/${uuid()}.jpg`,
+    `${ids.shopA}/${keyed}/extra/${uuid()}.jpg`,
+    `${uuid()}/${keyed}/${uuid()}.jpg`, // not a shop
     `${uuid()}/${uuid()}.jpg`, // not a shop
     `${uuid()}.jpg`,
     `../${ids.shopA}/${uuid()}.jpg`,
@@ -246,7 +254,9 @@ test('database and frontend agree on which references are customer uploads', asy
     `https://x.example.test/storage/v1/object/sign/customer-uploads/${file}?token=abc`,
     `${STORAGE_URL}/vehicles/${shop}/front.jpg`,
     'https://cdn.example.test/logo.png',
-    'nested/too/deep.jpg',
+    `${shop}/${'a'.repeat(32)}/${uuid()}.png`,
+    `${STORAGE_URL}/customer-uploads/${shop}/${'b'.repeat(32)}/${uuid()}.jpg`,
+    'nested/too/deep/four.jpg',
     '',
   ]
   for (const ref of cases) {
@@ -259,13 +269,31 @@ test('database and frontend agree on which references are customer uploads', asy
 // Quote flows and customer photo authorization
 // ---------------------------------------------------------------------------
 
-async function newLead(shopKey: string, custom: boolean, front: string | null, rear: string | null, parts: unknown[]) {
+type Upload = { key: string; ref: string }
+async function uploadSession(): Promise<Upload> {
+  const key = newUploadKey()
+  return { key, ref: await customerUploadRef(key) }
+}
+
+// What the custom-build flow does: upload each photo under the request's
+// upload ref, as an anonymous visitor.
+async function uploadPhotos(shopKey: string, session: Upload, n: number, ext = 'jpg'): Promise<string[]> {
+  const paths: string[] = []
+  for (let i = 0; i < n; i++) {
+    const p = `${ids[shopKey]}/${session.ref}/${uuid()}.${ext}`
+    await as(db, anon, (tx: any) => tx.query(`INSERT INTO storage.objects (bucket_id, name) VALUES ('customer-uploads', $1)`, [p]))
+    paths.push(p)
+  }
+  return paths
+}
+
+async function newLead(shopKey: string, custom: boolean, front: string | null, rear: string | null, parts: unknown[], uploadKey: string | null = null) {
   const marker = rand()
   await as(db, anon, (tx: any) => tx.query(`INSERT INTO leads (shop_id, customer_name, customer_email, vehicle_id, vehicle_name,
       fulfillment_mode, selected_parts, parts_total, shipping_total, grand_total, estimated_lead_time_days, status, is_custom, notes,
-      front_image_url, rear_image_url)
-    VALUES ($1, 'Jordan Customer', $2, $3, 'Bronco', 'local', $4, 650, 0, 650, 5, 'new', $5, $6, $7, $8)`,
-    [ids[shopKey], `${rand()}@customers.example.test`, custom ? 'custom' : 'veh', JSON.stringify(parts), custom, marker, front, rear]))
+      front_image_url, rear_image_url, upload_key)
+    VALUES ($1, 'Jordan Customer', $2, $3, 'Bronco', 'local', $4, 650, 0, 650, 5, 'new', $5, $6, $7, $8, $9)`,
+    [ids[shopKey], `${rand()}@customers.example.test`, custom ? 'custom' : 'veh', JSON.stringify(parts), custom, marker, front, rear, uploadKey]))
   return (await one(db, `SELECT id FROM leads WHERE notes = $1`, [marker])).id
 }
 
@@ -276,15 +304,28 @@ async function quoteFor(leadId: string, userKey: string, front: string | null, r
   return q
 }
 
-test('custom quote flow: customer uploads, staff quote, customer sees only that quote\'s photos', async () => {
-  const front = `${ids.shopA}/${uuid()}.jpg`
-  const rear = `${ids.shopA}/${uuid()}.png`
-  const ref = `${ids.shopA}/${uuid()}.webp`
-  for (const p of [front, rear, ref]) {
-    await as(db, anon, (tx: any) => tx.query(`INSERT INTO storage.objects (bucket_id, name) VALUES ('customer-uploads', $1)`, [p]))
-  }
-  const parts = [{ id: 'c1', name: 'Fender', type: 'send', price: 300, priced: true, reference_image_path: ref, box: { view: 'front', x: 1, y: 1, w: 5, h: 5 } }]
-  const leadId = await newLead('shopA', true, front, rear, parts)
+const ITEM = [{ id: 'w', name: 'Work', type: 'send', price: 100, priced: true }]
+const partsWithRef = (ref: string) =>
+  [{ id: 'c1', name: 'Fender', type: 'send', price: 300, priced: true, reference_image_path: ref, box: { view: 'front', x: 1, y: 1, w: 5, h: 5 } }]
+
+test('frontend and database derive the same upload ref from a key', async () => {
+  const key = newUploadKey()
+  assert.match(key, /^[0-9a-f]{64}$/)
+  const r = await one(db, `SELECT public.customer_upload_ref($1) AS ref`, [key])
+  assert.equal(r.ref, await customerUploadRef(key))
+  assert.equal((await one(db, `SELECT public.customer_upload_ref('not-a-key') AS ref`)).ref, null)
+})
+
+test('custom quote flow: customer uploads, staff quote, customer sees only that request\'s photos', async () => {
+  const s = await uploadSession()
+  const [front, rear, ref] = await uploadPhotos('shopA', s, 3)
+  const parts = partsWithRef(ref)
+  const leadId = await newLead('shopA', true, front, rear, parts, s.key)
+
+  // The key is never stored; only its ref is.
+  const lead = await one(db, `SELECT upload_key, upload_ref FROM leads WHERE id = $1`, [leadId])
+  assert.equal(lead.upload_key, null)
+  assert.equal(lead.upload_ref, s.ref)
 
   // Staff of the shop can read the lead's photos (and therefore sign them).
   const visible = await as(db, user('a1'), (tx: any) => tx.query(`SELECT name FROM storage.objects WHERE name = ANY($1)`, [[front, rear, ref]]))
@@ -295,6 +336,57 @@ test('custom quote flow: customer uploads, staff quote, customer sees only that 
   const pub = await as(db, anon, (tx: any) => one(tx, `SELECT public.get_public_quote($1) AS q`, [q.public_token]))
   assert.ok(pub.q, 'customer can open the quote')
   assert.deepEqual(await photoPaths('quote', q.public_token), [front, rear, ref].sort())
+
+  // Build-sheet sharing for the same request shows the same photos.
+  const sheet = await newSheet('shopA', 'a1', { front, rear, parts, lead: leadId })
+  const token = await shareLink(user('a1'), sheet.id)
+  assert.deepEqual(await photoPaths('build_sheet', token), [front, rear, ref].sort())
+})
+
+test('two customers of the same shop cannot see each other\'s photos', async () => {
+  // Customer 1 submits a custom request with photos.
+  const s1 = await uploadSession()
+  const [front1, rear1, ref1] = await uploadPhotos('shopA', s1, 3)
+  const lead1 = await newLead('shopA', true, front1, rear1, partsWithRef(ref1), s1.key)
+
+  // Customer 2, same shop, learns customer 1's paths and references them in
+  // their own request: with no key, with their own key, and with a forged ref.
+  const s2 = await uploadSession()
+  const [front2] = await uploadPhotos('shopA', s2, 1)
+  const leadNoKey = await newLead('shopA', true, front1, rear1, partsWithRef(ref1))
+  const leadOwnKey = await newLead('shopA', true, front1, front2, partsWithRef(ref1), s2.key)
+  const forged = rand()
+  await as(db, anon, (tx: any) => tx.query(`INSERT INTO leads (shop_id, customer_name, customer_email, vehicle_id, vehicle_name, fulfillment_mode,
+      selected_parts, parts_total, shipping_total, grand_total, estimated_lead_time_days, status, is_custom, notes, front_image_url, upload_ref)
+    VALUES ($1, 'Mallory', 'm@customers.example.test', 'custom', 'Truck', 'local', '[]', 0, 0, 0, 0, 'new', true, $2, $3, $4)`,
+    [ids.shopA, forged, front1, s1.ref]))
+  const leadForged = (await one(db, `SELECT id, upload_ref FROM leads WHERE notes = $1`, [forged]))
+  assert.equal(leadForged.upload_ref, null, 'callers cannot set upload_ref')
+
+  // Staff quote each request exactly as submitted.
+  const q1 = await quoteFor(lead1, 'a1', front1, rear1, partsWithRef(ref1))
+  const qNoKey = await quoteFor(leadNoKey, 'a1', front1, rear1, partsWithRef(ref1))
+  const qOwnKey = await quoteFor(leadOwnKey, 'a1', front1, front2, partsWithRef(ref1))
+  const qForged = await quoteFor(leadForged.id, 'a1', front1, null, ITEM)
+
+  assert.deepEqual(await photoPaths('quote', q1.public_token), [front1, rear1, ref1].sort(), 'customer 1 still sees their own photos')
+  assert.deepEqual(await photoPaths('quote', qNoKey.public_token), [], 'no key: no photos')
+  assert.deepEqual(await photoPaths('quote', qOwnKey.public_token), [front2], 'own key: only their own photo')
+  assert.deepEqual(await photoPaths('quote', qForged.public_token), [], 'forged ref: no photos')
+
+  // A build sheet for customer 2's request does not leak customer 1's photos either.
+  const sheet = await newSheet('shopA', 'a1', { front: front1, rear: front2, parts: partsWithRef(ref1), lead: leadOwnKey })
+  const token = await shareLink(user('a1'), sheet.id)
+  assert.deepEqual(await photoPaths('build_sheet', token), [front2])
+
+  // Staff cannot move a request onto another request's photos.
+  await as(db, user('a1'), (tx: any) => tx.query(`UPDATE leads SET upload_ref = $2 WHERE id = $1`, [leadNoKey, s1.ref]))
+  assert.equal((await one(db, `SELECT upload_ref FROM leads WHERE id = $1`, [leadNoKey])).upload_ref, null)
+  assert.deepEqual(await photoPaths('quote', qNoKey.public_token), [])
+
+  // Staff still see every photo in their shop.
+  const staffSees = await as(db, user('a1'), (tx: any) => tx.query(`SELECT name FROM storage.objects WHERE name = ANY($1)`, [[front1, rear1, ref1, front2]]))
+  assert.equal(staffSees.rows.length, 4)
 })
 
 test('preconfigured quote flow still works and exposes no customer uploads', async () => {
@@ -308,34 +400,115 @@ test('preconfigured quote flow still works and exposes no customer uploads', asy
 })
 
 test('customer photo access is scoped to the token\'s own record and shop', async () => {
-  const own = `${ids.shopA}/${uuid()}.jpg`
-  const foreign = `${ids.shopB}/${uuid()}.jpg`
-  const item = [{ id: 'w', name: 'Work', type: 'send', price: 100, priced: true }]
-  const draftLead = await newLead('shopA', true, own, foreign, [])
-  const draft = await quoteFor(draftLead, 'a1', own, foreign, item, false)
+  const s = await uploadSession()
+  const [own] = await uploadPhotos('shopA', s, 1)
+  const foreign = `${ids.shopB}/${s.ref}/${uuid()}.jpg` // same ref, other shop's folder
+  const draftLead = await newLead('shopA', true, own, foreign, [], s.key)
+  const draft = await quoteFor(draftLead, 'a1', own, foreign, ITEM, false)
   assert.deepEqual(await photoPaths('quote', draft.public_token), [], 'draft quotes are not visible')
 
-  const leadId = await newLead('shopA', true, own, foreign, [])
-  const sent = await quoteFor(leadId, 'a1', own, foreign, item)
+  const leadId = await newLead('shopA', true, own, foreign, [], s.key)
+  const sent = await quoteFor(leadId, 'a1', own, foreign, ITEM)
   assert.deepEqual(await photoPaths('quote', sent.public_token), [own], 'another shop\'s file is never returned')
   assert.deepEqual(await photoPaths('quote', uuid()), [])
   assert.deepEqual(await photoPaths('quote', 'nope'), [])
   assert.deepEqual(await photoPaths('build_sheet', sent.public_token), [], 'a quote token does not open build sheets')
   assert.deepEqual(await photoPaths('other', sent.public_token), [])
 
-  const sheet = await newSheet('shopA', 'a1', { front: own, rear: `${STORAGE_URL}/customer-uploads/${foreign}` })
+  const sheet = await newSheet('shopA', 'a1', { front: own, rear: `${STORAGE_URL}/customer-uploads/${foreign}`, lead: leadId })
   assert.deepEqual(await photoPaths('build_sheet', sheet.id), [], 'legacy id is not a token')
   const token = await shareLink(user('a1'), sheet.id)
   assert.deepEqual(await photoPaths('build_sheet', token), [own])
   await as(db, user('a1'), (tx: any) => tx.query(`SELECT public.revoke_build_sheet_share_link($1)`, [sheet.id]))
   assert.deepEqual(await photoPaths('build_sheet', token), [])
+
+  // A build sheet with no linked request shows no customer photos.
+  const orphan = await newSheet('shopA', 'a1', { front: own })
+  assert.deepEqual(await photoPaths('build_sheet', await shareLink(user('a1'), orphan.id)), [])
 })
 
-test('only the server can resolve photo paths for a token', async () => {
+test('only the server can resolve photo paths or re-run the legacy backfill', async () => {
   for (const who of [anon, user('a1'), user('admin')]) {
     await assert.rejects(
       as(db, who, (tx: any) => tx.query(`SELECT public.customer_photo_paths('quote', $1)`, [uuid()])),
       /permission denied/i,
     )
+    await assert.rejects(
+      as(db, who, (tx: any) => tx.query(`SELECT public.backfill_legacy_customer_photo_claims()`)),
+      /permission denied/i,
+    )
+    await assert.rejects(
+      as(db, who, (tx: any) => tx.query(`SELECT * FROM legacy_customer_photo_claims`)),
+      /permission denied/i,
+    )
   }
+})
+
+// ---------------------------------------------------------------------------
+// Legacy photos (uploaded before request binding)
+// ---------------------------------------------------------------------------
+
+test('legacy photos: unambiguous ones stay visible to their customer; others become staff-only', async () => {
+  const pre = await createDb({ before: BINDING })
+  const store: Record<string, string> = {}
+  await seed(pre, store)
+  const legacy = () => `${store.shopA}/${uuid()}.jpg`
+  const obj = (name: string, at: string) =>
+    pre.query(`INSERT INTO storage.objects (bucket_id, name, created_at) VALUES ('customer-uploads', $1, $2)`, [name, at])
+  const lead = async (front: string | null, rear: string | null, at: string, parts: unknown[] = []) =>
+    (await one(pre, `INSERT INTO leads (shop_id, customer_name, customer_email, vehicle_id, vehicle_name, fulfillment_mode, selected_parts,
+        parts_total, shipping_total, grand_total, estimated_lead_time_days, status, is_custom, front_image_url, rear_image_url, submitted_at)
+      VALUES ($1, 'Legacy', $2, 'custom', 'Truck', 'local', $3, 0, 0, 0, 0, 'new', true, $4, $5, $6) RETURNING id`,
+      [store.shopA, `${rand()}@customers.example.test`, JSON.stringify(parts), front, rear, at])).id
+
+  // Genuine: uploaded minutes before the request that references it.
+  const good = legacy(); const goodRef = legacy()
+  await obj(good, '2026-09-01T10:00:00Z'); await obj(goodRef, '2026-09-01T10:01:00Z')
+  const goodLead = await lead(`${STORAGE_URL}/customer-uploads/${good}`, null, '2026-09-01T10:05:00Z', partsWithRef(goodRef))
+  // Hijacked: a second request references the same photo.
+  const shared = legacy()
+  await obj(shared, '2026-09-02T10:00:00Z')
+  const victim = await lead(shared, null, '2026-09-02T10:05:00Z')
+  const thief = await lead(shared, null, '2026-09-03T09:00:00Z')
+  // Photo uploaded after the request, or long before it.
+  const late = legacy(); const stale = legacy()
+  await obj(late, '2026-09-04T12:00:00Z'); await obj(stale, '2026-08-01T00:00:00Z')
+  const oddLead = await lead(late, stale, '2026-09-04T10:00:00Z')
+
+  await applyMigrations(pre, { from: BINDING })
+
+  const claims = (await pre.query(`SELECT lead_id, object_path FROM legacy_customer_photo_claims`)).rows
+  const claimed = (l: string) => claims.filter((c: any) => c.lead_id === l).map((c: any) => c.object_path).sort()
+  assert.deepEqual(claimed(goodLead), [good, goodRef].sort())
+  assert.deepEqual(claimed(victim), [], 'ambiguous: staff-only')
+  assert.deepEqual(claimed(thief), [])
+  assert.deepEqual(claimed(oddLead), [])
+
+  // Through a quote link, the genuine customer sees exactly their photos.
+  const send = async (leadId: string, front: string | null) => {
+    const q = await as(pre, { role: 'authenticated', id: store.a1 }, (tx: any) => one(tx,
+      `INSERT INTO quotes (lead_id, selected_parts, shipping_total, front_image_url) VALUES ($1, $2, 0, $3) RETURNING id, public_token`,
+      [leadId, JSON.stringify([...ITEM, ...partsWithRef(goodRef)]), front]))
+    await as(pre, service, (tx: any) => tx.query(`SELECT public.mark_quote_sent($1, $2)`, [q.id, store.a1]))
+    return as(pre, service, (tx: any) => one(tx, `SELECT public.customer_photo_paths('quote', $1) AS p`, [q.public_token])).then((r: any) => [...r.p].sort())
+  }
+  assert.deepEqual(await send(goodLead, `${STORAGE_URL}/customer-uploads/${good}`), [good, goodRef].sort())
+  assert.deepEqual(await send(thief, shared), [], 'the second request cannot see the shared photo')
+  assert.deepEqual(await send(victim, shared), [])
+
+  // Staff-only fallback: staff of the shop can still read every legacy photo.
+  const staffSees = await as(pre, { role: 'authenticated', id: store.a1 }, (tx: any) =>
+    tx.query(`SELECT name FROM storage.objects WHERE name = ANY($1)`, [[good, goodRef, shared, late, stale]]))
+  assert.equal(staffSees.rows.length, 5)
+
+  // Re-running the backfill is idempotent, and a later request referencing a
+  // claimed legacy photo makes it ambiguous, removing the claim.
+  const rerun = async () => (await as(pre, service, (tx: any) => one(tx, `SELECT public.backfill_legacy_customer_photo_claims() AS r`))).r
+  assert.deepEqual(await rerun(), { added: 0, removed: 0 })
+  await lead(good, null, '2026-09-05T00:00:00Z')
+  const r = await rerun()
+  assert.equal(r.removed, 1)
+  const after = (await pre.query(`SELECT object_path FROM legacy_customer_photo_claims WHERE lead_id = $1`, [goodLead])).rows.map((x: any) => x.object_path)
+  assert.deepEqual(after, [goodRef])
+  await pre.close()
 })

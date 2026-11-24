@@ -77,8 +77,50 @@ and `shop-logos`.
   - The bucket enforces `file_size_limit = 10 MB` and image `allowed_mime_types`
     server-side.
 - `customer_photo_paths(kind, token)` (service_role only): the customer-upload
-  paths attached to a non-draft quote or a shared build sheet, limited to that
-  record's own shop folder.
+  paths attached to a non-draft quote or a shared build sheet. Tightened by the
+  next migration so a shop folder alone is not enough.
+
+### Database: `supabase/migrations/20261125120000_bind_customer_photos_to_requests.sql`
+
+A matching shop folder does not prove a photo belongs to the request behind a
+quote or build sheet. Lead photo fields are written by anonymous customers,
+and every path used to be listable. A customer who referenced another
+customer's path in their own request could then see it through their own
+quote link. This migration binds every photo a customer can see to one request.
+
+- **New uploads.**
+  - The custom-build flow creates a random 64-hex **upload key** per request,
+    and uploads to `<shop id>/<upload ref>/<uuid>.<ext>`, where
+    `upload ref = first 32 hex of sha256(key)`.
+  - The request is submitted with `upload_key`. A trigger stores only
+    `leads.upload_ref` and discards the key. A CHECK constraint guarantees the
+    key is never stored.
+  - `upload_ref` cannot be set by callers or changed later, including by staff.
+  - A path reveals the ref but not the key, so no other request can claim it.
+- **Customer visibility.** `customer_photo_paths()` returns a referenced path
+  only if it belongs to the record's own lead, which must be in the same shop.
+  That means either:
+  - a keyed path whose ref equals the lead's `upload_ref`, or
+  - a legacy path claimed by that lead.
+
+  Build sheets with no linked lead show no customer photos.
+- **Existing (legacy) photos** `<shop id>/<uuid>.<ext>`, recorded in
+  `legacy_customer_photo_claims` by `backfill_legacy_customer_photo_claims()`
+  (service_role only, runs once in the migration):
+  - A legacy photo is claimed by a lead only if it is in that lead's shop
+    folder, **exactly one** lead references it, and the object was uploaded
+    within **24 hours before** that lead was submitted.
+  - Everything else is **staff-only**: the shop's staff still see it on the lead
+    and quote pages (shop-folder Storage policy), but customer links do not
+    show it. This covers photos referenced by several requests (possible
+    hijacks), photos uploaded after the request, and long-orphaned uploads.
+  - Re-running the backfill is idempotent. A photo that has since become
+    ambiguous loses its claim.
+- **Uploads during rollout.** The two-level legacy layout is still accepted
+  for anonymous uploads, so the currently deployed frontend keeps working
+  between steps 1 and 3. Those photos are staff-only until the backfill re-run
+  in step 4 claims them under the same rules. Remove the legacy layout from
+  `customer_upload_path_allowed()` in the phase-2 PR.
 
 ### Staged: `supabase/rollout/20261124130000_make_customer_uploads_private.sql` (phase 2)
 
@@ -101,6 +143,8 @@ caller. Unknown tokens get an empty result.
   - Public vehicle and logo URLs pass through unchanged.
 - Custom-build flow:
   - Names uploads from the MIME type and checks type and size before upload.
+  - Uploads under the request's upload ref, and submits the request with the
+    upload key.
   - Previews the visitor's own files locally, since visitors cannot read the
     private bucket.
 - Staff pages (lead, pricing modal, quote builder) use signed URLs.
@@ -119,7 +163,9 @@ Each step is a manual action by someone with access. None was performed here.
    to all buckets. Any policy created in the dashboard that grants anon or
    authenticated SELECT must be dropped in step 1, or the bucket stays
    listable. Record the current `storage.buckets` row for `customer-uploads`.
-1. **Apply phase 1** (`20261124120000_customer_data_privacy.sql`). This is
+1. **Apply phase 1 and the binding migration** (`20261124120000_customer_data_privacy.sql`,
+   then `20261125120000_bind_customer_photos_to_requests.sql`). Record the
+   backfill result the migration returns (`added`/`removed`). This is
    compatible with the current frontend:
    - Anon listing of sheets and photos stops.
    - Old `/build/` links stop working (intended).
@@ -130,9 +176,14 @@ Each step is a manual action by someone with access. None was performed here.
 2. **Deploy the `customer-photos` Edge Function** with `verify_jwt = false`
    (from `supabase/config.toml`).
 3. **Deploy the frontend** (merge the reviewed PR; Vercel deploys `main`).
-4. **Verify on the environment** (see section 5) while the bucket is still public.
+4. **Re-run the legacy backfill** once, so requests submitted by the old
+   frontend between steps 1 and 3 are claimed under the same rules:
+   `SELECT public.backfill_legacy_customer_photo_claims();` as service_role,
+   for example from the SQL editor. Then **verify on the environment** (see
+   section 5) while the bucket is still public.
 5. **Phase 2:** move `supabase/rollout/20261124130000_make_customer_uploads_private.sql`
-   into `supabase/migrations/` in a follow-up PR, then apply it.
+   into `supabase/migrations/` in a follow-up PR, then apply it. In the same
+   PR, stop accepting the legacy two-level upload layout.
 6. **Verify again**:
    - `/storage/v1/object/public/customer-uploads/<path>` now fails.
    - Staff lead and quote pages show photos.
@@ -174,6 +225,13 @@ Each step is a manual action by someone with access. None was performed here.
   - The lead is created.
 - Staff see the custom photos, then create and send a quote. The customer quote
   page shows the photos.
+- Two synthetic customers of the same shop each submit a custom request with
+  photos. Customer B's quote link shows only B's photos, even if B's request
+  references A's photo paths.
+- The new lead row has `upload_ref` set and `upload_key` empty, and its photos
+  sit under `<shop>/<upload_ref>/`.
+- A quote for a lead submitted before the migration shows its photos if the
+  backfill claimed them. Otherwise, staff still see them on the lead page.
 - Preconfigured quote: vehicle template images still load publicly.
 - Shop logos still load.
 

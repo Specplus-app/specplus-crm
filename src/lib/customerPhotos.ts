@@ -12,7 +12,7 @@ import { CUSTOMER_UPLOADS_BUCKET, SIGNED_URL_TTL_SECONDS, customerUploadPath, ty
 
 export {
   CUSTOMER_UPLOADS_BUCKET, CUSTOMER_UPLOAD_MAX_BYTES, CUSTOMER_UPLOAD_TYPES, SIGNED_URL_TTL_SECONDS, STAFF_PHOTO_ACCESS,
-  customerUploadError, customerUploadObjectName, customerUploadPath,
+  customerUploadError, customerUploadObjectName, customerUploadPath, customerUploadRef, newUploadKey,
 } from './customerUploadRefs'
 export type { PhotoAccess } from './customerUploadRefs'
 
